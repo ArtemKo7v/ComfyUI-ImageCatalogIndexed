@@ -1,0 +1,15 @@
+# pyproject.toml
+[project]
+name = "comfyui-image-catalog-indexed"
+description = "ComfyUI node that lets the user store indexed collection of images with associated properties."
+version = "0.0.1"
+license = { text = "MIT" }
+dependencies  = [
+]
+
+[project.urls]
+Repository = "https://github.com/ArtemKo7v/ComfyUI-ImageCatalogIndexed"
+
+[tool.comfy]
+PublisherId = "artemko7v"
+DisplayName = "Image Catalog Indexed"
