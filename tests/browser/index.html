@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Image catalog integration harness</title></head>
+<body style="background:#181818;color:#ddd;font:14px sans-serif">
+  <main style="width:420px;margin:20px auto">
+    <p>Image Catalog Indexed — browser integration harness</p>
+    <label>image_index <input id="index" type="number" value="0" min="0"></label>
+    <div id="native-controls"></div>
+    <button id="queue">Queue workflow</button><button id="restore">Restore workflow</button>
+    <pre id="outputs"></pre><div id="node"></div>
+  </main>
+  <script type="module">
+    import { app } from "/scripts/app.js";
+    import { api } from "/scripts/api.js";
+    import "/extensions/catalog/image_catalog_indexed.js";
+    class TestNode {
+      constructor() {
+        this.widgets = []; this.outputs = [{ name: "IMAGE", type: "IMAGE", links: [1] }];
+        this.inputs = []; this.properties = {}; this.size = [360, 650]; this.id = 1;
+        this.addWidget("number", "image_index", 0, () => {}, {});
+        app.extension.getCustomWidgets().IMAGE_CATALOG_STATE(this, "catalog_state");
+        this.onNodeCreated();
+      }
+      addWidget(type, name, value, callback, options) {
+        const widget = { type, name, value, callback, options };
+        this.widgets.push(widget);
+        if (type === "combo") {
+          const label = document.createElement("label");
+          label.textContent = "Index after queue ";
+          const select = document.createElement("select");
+          select.setAttribute("aria-label", "Index after queue");
+          for (const mode of options.values) select.add(new Option(mode, mode));
+          select.value = value;
+          select.onchange = () => { widget.value = select.value; callback(select.value); };
+          label.append(select);
+          document.querySelector("#native-controls").replaceChildren(label);
+          widget.testControl = select;
+        }
+        return widget;
+      }
+      addDOMWidget(name, type, root, options) { document.querySelector("#node").append(root); return this.addWidget(type, name, "", () => {}, options); }
+      addOutput(name, type) { this.outputs.push({ name, type, links: [] }); }
+      removeOutput(index) { this.outputs.splice(index, 1); }
+      disconnectOutput(index) { this.outputs[index].links = []; }
+      setSize(size) { this.size = size; }
+      setDirtyCanvas() {
+        document.querySelector("#outputs").textContent = this.outputs.map((output) => `${output.name}: ${output.type}`).join("\n");
+        for (const widget of this.widgets) if (widget.testControl) widget.testControl.value = widget.value;
+      }
+    }
+    await app.extension.beforeRegisterNodeDef(TestNode, { name: "ArtemKo7vImageCatalogIndexed", input: { required: { catalog_state: [] } } });
+    await app.extension.setup();
+    window.catalogNode = new TestNode();
+    document.querySelector("#index").oninput = (event) => {
+      const widget = window.catalogNode.widgets[0]; widget.value = Number(event.target.value); widget.callback(widget.value);
+    };
+    document.querySelector("#queue").onclick = async () => {
+      const node = window.catalogNode;
+      try {
+        await api.queuePrompt(0, { output: { "1": { class_type: "ArtemKo7vImageCatalogIndexed", inputs: {
+          image_index: node.widgets[0].value, catalog_state: node.imageCatalog.stateWidget.serializeValue(),
+        } } }, workflow: {} });
+        document.querySelector("#index").value = node.widgets[0].value;
+      } catch (error) { node.imageCatalog.status(error.message, true); }
+    };
+    document.querySelector("#restore").onclick = () => {
+      const old = window.catalogNode;
+      const data = {}; old.onSerialize(data); const index = old.widgets[0].value; old.onRemoved();
+      const node = new TestNode(); node.properties = data.properties; node.widgets[0].value = index;
+      window.catalogNode = node; node.onConfigure();
+    };
+  </script>
+</body>
+</html>

@@ -1,0 +1,5 @@
+# Test harness dependencies; runtime dependencies are supplied by ComfyUI.
+numpy>=1.24
+Pillow>=10
+aiohttp>=3.11.8
+playwright>=1.49

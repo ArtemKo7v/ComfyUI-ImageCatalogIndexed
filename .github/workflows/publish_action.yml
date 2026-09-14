@@ -1,0 +1,42 @@
+name: Publish to Comfy registry
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "pyproject.toml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-registry-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/tests.yml
+
+  publish-node:
+    name: Publish Custom Node to registry
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v7
+      - name: Verify registry token
+        env:
+          COMFY_REGISTRY_TOKEN: ${{ secrets.COMFY_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$COMFY_REGISTRY_TOKEN" ]; then
+            echo "::error::Set the COMFY_REGISTRY_TOKEN repository secret before publishing."
+            exit 1
+          fi
+      - name: Publish Custom Node
+        uses: Comfy-Org/publish-node-action@d2366e7abb6ab16f3bb03e3520ae25c8cf749bc9 # main, 2026-09-14
+        with:
+          skip_checkout: "true"
+          personal_access_token: ${{ secrets.COMFY_REGISTRY_TOKEN }}
