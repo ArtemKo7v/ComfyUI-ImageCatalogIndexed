@@ -25,10 +25,8 @@ def export_catalog(store, catalog_id):
     try:
         with store.lock:
             data = store.get(catalog_id)
-            # Replay history is local execution state, not portable catalog data.
-            data["applied_operations"] = []
             with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_STORED) as archive:
-                archive.writestr("catalog.json", json.dumps(data, ensure_ascii=False, indent=2))
+                archive.write(store._child(store._directory(catalog_id), "catalog.json"), "catalog.json")
                 for entry in data["entries"]:
                     path = store._child(store._directory(catalog_id), entry["file"])
                     archive.write(path, entry["file"])
@@ -76,6 +74,7 @@ def _import_catalog(store, stream, validate_image):
         data = copy.deepcopy(data)
         data["id"] = uuid.uuid4().hex
         data["schema_revision"] = 0
+        data["revision"] = 0
         data["applied_operations"] = []
         store.root.mkdir(parents=True, exist_ok=True)
         # Assemble and verify the import privately; the final rename publishes

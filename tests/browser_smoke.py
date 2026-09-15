@@ -51,128 +51,141 @@ async def main():
                     errors = []
                     page.on("pageerror", lambda error: errors.append(str(error)))
                     await page.goto(f"http://127.0.0.1:{port}/")
+                    page.on("dialog", lambda dialog: dialog.accept())
                     await expect(page.get_by_label("Index after queue", exact=True)).to_be_visible()
                     assert await page.evaluate("window.catalogNode.widgets.slice(0, 2).map(widget => widget.name)") == ["image_index", "index_after_queue"]
-                    assert await page.locator(".image-catalog").get_by_label("Index after queue", exact=True).count() == 0
+                    await expect(page.locator(".ic-image-block")).to_have_count(0)
+                    await expect(page.locator(".ic-selector-row").get_by_role("button", name="Refresh", exact=True)).to_be_visible()
+                    await expect(page.get_by_role("button", name="Import Catalog", exact=True)).to_be_visible()
                     await page.get_by_placeholder("Catalog name").fill("Browser example")
-                    await page.get_by_placeholder("Property name").nth(0).fill("caption")
-                    await page.locator(".ic-row select").nth(0).select_option("Text")
-                    await page.get_by_placeholder("Property name").nth(1).fill("seed")
-                    await page.locator(".ic-row select").nth(1).select_option("Integer")
-                    await page.get_by_placeholder("Property name").nth(2).fill("enabled")
-                    await page.locator(".ic-row select").nth(2).select_option("Boolean")
+                    for index, (name, kind) in enumerate([("caption", "Text"), ("seed", "Integer"), ("enabled", "Boolean")]):
+                        await page.get_by_placeholder("Property name").nth(index).fill(name)
+                        await page.locator(".ic-row select").nth(index).select_option(kind)
                     await page.get_by_role("button", name="Create Now", exact=True).click()
-                    await expect(page.get_by_label("Add image", exact=True)).to_be_visible()
+                    await expect(page.locator(".ic-image-block")).to_be_visible()
+                    await expect(page.get_by_role("button", name="Import Catalog", exact=True)).to_have_count(0)
+                    assert await page.locator(".ic-catalog-actions button").all_text_contents() == ["Edit Catalog", "Export Catalog", "Reload Catalog", "Delete Catalog"]
+                    assert await page.locator(".ic-image-actions").evaluate("actions => actions.previousElementSibling.tagName") == "HR"
+                    assert await page.locator(".ic-delete-actions").evaluate("row => getComputedStyle(row).justifyContent") == "flex-end"
                     png = BytesIO()
                     Image.new("RGB", (320, 200), (55, 110, 190)).save(png, format="PNG")
-                    await page.get_by_label("Add image", exact=True).set_input_files({"name": "first.png", "mimeType": "image/png", "buffer": png.getvalue()})
-                    await page.get_by_label("caption", exact=True).fill("First line\nSecond line")
-                    await page.get_by_label("seed", exact=True).fill("123")
+                    async def add_file(name, caption, seed):
+                        await page.get_by_label("Add image", exact=True).set_input_files({"name": name, "mimeType": "image/png", "buffer": png.getvalue()})
+                        await page.get_by_label("caption", exact=True).fill(caption)
+                        await page.get_by_label("seed", exact=True).fill(str(seed))
+                    await add_file("first.png", "First line\nSecond line", 123)
                     await page.get_by_label("enabled", exact=True).check()
                     await page.get_by_role("button", name="Queue workflow", exact=True).click()
-                    await expect(page.get_by_label("Save changes", exact=True)).to_be_visible()
+                    await page.wait_for_function("window.lastOutputs?.[1] === 'First line\\nSecond line'")
                     assert await page.evaluate("window.lastOutputs.slice(0, 4)") == [[1, 200, 320, 3], "First line\nSecond line", 123, True]
-                    await expect(page.locator(".ic-preview")).to_be_visible()
-                    assert await page.locator(".ic-preview").evaluate("image => image.complete && image.naturalWidth === 320")
-                    await page.get_by_label("caption", exact=True).fill("Unsaved caption")
-                    await page.get_by_role("button", name="Queue workflow", exact=True).click()
-                    await page.wait_for_function("window.lastOutputs[1] === 'Unsaved caption'")
-                    assert backend.STORE.list()["catalogs"][0]["count"] == 1
                     catalog_id = backend.STORE.list()["catalogs"][0]["id"]
-                    assert backend.STORE.get(catalog_id)["entries"][0]["values"]["caption"] == "First line\nSecond line"
-                    await page.get_by_label("Save changes", exact=True).check()
-                    await page.get_by_role("button", name="Queue workflow", exact=True).click()
-                    await page.wait_for_function("Object.keys(window.catalogNode.imageCatalog.state.edits).length === 0")
-                    assert backend.STORE.get(catalog_id)["entries"][0]["values"]["caption"] == "Unsaved caption"
-                    await page.get_by_role("button", name="Restore workflow", exact=True).click()
-                    await expect(page.get_by_label("caption", exact=True)).to_have_value("Unsaved caption")
-                    assert await page.evaluate("window.catalogNode.outputs.map(output => output.type)") == ["IMAGE", "STRING", "INT", "BOOLEAN"]
-                    await page.get_by_label("Hide", exact=True).check()
-                    await expect(page.get_by_label("caption", exact=True)).to_be_disabled()
-                    await page.get_by_role("button", name="Queue workflow", exact=True).click()
-                    await expect(page.locator(".ic-status")).to_contain_text("No visible images")
-                    await page.get_by_label("Hide", exact=True).uncheck()
-                    await page.get_by_role("button", name="Queue workflow", exact=True).click()
-                    await expect(page.locator(".ic-status")).to_contain_text("completed")
-                    await page.get_by_role("button", name="Add image", exact=True).click()
-                    await page.get_by_label("Add image", exact=True).set_input_files({"name": "second.png", "mimeType": "image/png", "buffer": png.getvalue()})
-                    await page.get_by_label("caption", exact=True).fill("Second image")
-                    await page.get_by_label("seed", exact=True).fill("222")
-                    await page.get_by_role("button", name="Add next image", exact=True).click()
-                    await page.get_by_label("Add image", exact=True).set_input_files({"name": "discard.png", "mimeType": "image/png", "buffer": png.getvalue()})
-                    await page.get_by_role("button", name="Remove draft", exact=True).click()
-                    await expect(page.get_by_label("caption", exact=True)).to_have_value("Second image")
-                    await page.get_by_role("button", name="Add next image", exact=True).click()
-                    await page.get_by_label("Add image", exact=True).set_input_files({"name": "third.png", "mimeType": "image/png", "buffer": png.getvalue()})
-                    await page.get_by_label("caption", exact=True).fill("Third image")
-                    await page.get_by_label("seed", exact=True).fill("333")
-                    draft_tokens = await page.evaluate("window.catalogNode.imageCatalog.state.newImages.map(image => image.token)")
-                    await page.get_by_label("Image", exact=True).select_option("new:" + draft_tokens[0])
-                    await expect(page.get_by_label("caption", exact=True)).to_have_value("Second image")
-                    await expect(page.get_by_label("seed", exact=True)).to_have_value("222")
-                    await page.get_by_label("Image", exact=True).select_option("new:" + draft_tokens[1])
-                    await expect(page.get_by_label("caption", exact=True)).to_have_value("Third image")
-                    assert backend.STORE.list()["catalogs"][0]["count"] == 1
-                    assert not list((backend.STORE.root / ".staging").iterdir())
+                    path = backend.STORE.root / catalog_id / "catalog.json"
+                    original_json = path.read_bytes()
+                    assert backend.STORE.get(catalog_id)["entries"] == []
+                    await page.get_by_role("button", name="Add Image", exact=True).click()
+                    await add_file("second.png", "Second image", 222)
+                    await page.get_by_role("button", name="Add Image", exact=True).click()
+                    await add_file("discard.png", "Discard", 0)
+                    await page.get_by_role("button", name="Delete", exact=True).click()
+                    assert await page.evaluate("window.catalogNode.imageCatalog.state.newImages.length") == 2
+                    await page.get_by_role("button", name="Add Image", exact=True).click()
+                    await add_file("third.png", "Third image", 333)
                     await page.get_by_label("Index after queue", exact=True).select_option("increment")
                     await page.get_by_role("button", name="Queue workflow", exact=True).click()
-                    await expect(page.get_by_label("Save changes", exact=True)).to_be_visible()
-                    assert backend.STORE.list()["catalogs"][0]["count"] == 3
-                    entries = backend.STORE.get(catalog_id)["entries"]
-                    assert [(entry["filename"], entry["values"]["seed"]) for entry in entries[1:]] == [("second.png", 222), ("third.png", 333)]
-                    assert await page.evaluate("window.lastOutputs[1]") == "Third image"
-                    assert await page.evaluate("window.catalogNode.imageCatalog.state.newImages.length") == 0
+                    await page.wait_for_function("window.lastOutputs[1] === 'Third image'")
+                    assert path.read_bytes() == original_json
                     assert await page.evaluate("window.catalogNode.widgets[0].value") == 0
+                    await page.get_by_role("button", name="Save Changes", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
+                    entries = backend.STORE.get(catalog_id)["entries"]
+                    assert [entry["values"]["seed"] for entry in entries] == [123, 222, 333]
+                    assert await page.evaluate("window.catalogNode.imageCatalog.state.newImages.length") == 0
+                    await page.get_by_label("Image", exact=True).select_option(entries[0]["id"])
+                    await page.get_by_label("caption", exact=True).fill("Workflow-only caption")
                     await page.get_by_role("button", name="Restore workflow", exact=True).click()
+                    await expect(page.get_by_label("caption", exact=True)).to_have_value("Workflow-only caption")
                     await expect(page.get_by_label("Index after queue", exact=True)).to_have_value("increment")
-                    await expect(page.get_by_label("caption", exact=True)).to_be_visible()
-                    page.on("dialog", lambda dialog: dialog.accept())
-                    assert await page.locator(".ic-catalog-actions").evaluate("actions => actions.previousElementSibling.tagName") == "HR"
+                    await page.get_by_role("button", name="Queue workflow", exact=True).click()
+                    await page.wait_for_function("window.lastOutputs[1] === 'Workflow-only caption'")
+                    assert backend.STORE.get(catalog_id)["entries"][0]["values"]["caption"] == "First line\nSecond line"
+                    await page.get_by_label("Image", exact=True).select_option(entries[0]["id"])
+                    await page.get_by_label("Hide", exact=True).check()
+                    await expect(page.get_by_label("caption", exact=True)).to_be_disabled()
+                    await page.get_by_label("image_index", exact=True).fill("0")
+                    await page.get_by_role("button", name="Queue workflow", exact=True).click()
+                    await page.wait_for_function("window.lastOutputs[1] === 'Second image'")
+                    assert not backend.STORE.get(catalog_id)["entries"][0]["hidden"]
+                    await page.get_by_label("Image", exact=True).select_option(entries[1]["id"])
+                    await page.get_by_role("button", name="Delete", exact=True).click()
+                    assert (path.parent / entries[1]["file"]).exists()
+                    assert len(backend.STORE.get(catalog_id)["entries"]) == 3
+                    assert await page.evaluate("window.catalogNode.imageCatalog.workingCatalog().entries.length") == 2
+                    await page.get_by_role("button", name="Export Catalog", exact=True).click()
+                    await expect(page.get_by_role("dialog")).to_be_visible()
+                    await page.get_by_role("dialog").get_by_role("button", name="Cancel", exact=True).click()
+                    await page.get_by_role("button", name="Export Catalog", exact=True).click()
+                    async with page.expect_download() as downloaded:
+                        await page.get_by_role("button", name="Export Saved Version", exact=True).click()
+                    download = await downloaded.value
+                    import zipfile
+                    with zipfile.ZipFile(await download.path()) as archive:
+                        assert archive.read("catalog.json") == path.read_bytes()
+                        assert len(archive.namelist()) == 4
+                    assert await page.evaluate("window.catalogNode.imageCatalog.hasUnsavedChanges()")
+                    await page.get_by_role("button", name="Export Catalog", exact=True).click()
+                    async with page.expect_download() as downloaded:
+                        await page.get_by_role("button", name="Save and Export", exact=True).click()
+                    download = await downloaded.value
+                    with zipfile.ZipFile(await download.path()) as archive:
+                        assert archive.read("catalog.json") == path.read_bytes()
+                        assert len(archive.namelist()) == 3
+                    assert not (path.parent / entries[1]["file"]).exists()
+                    assert backend.STORE.get(catalog_id)["entries"][0]["hidden"]
+                    assert not await page.evaluate("window.catalogNode.imageCatalog.hasUnsavedChanges()")
                     await page.evaluate("window.catalogNode.outputs[3].links = [77]")
                     await page.get_by_role("button", name="Edit Catalog", exact=True).click()
+                    await expect(page.locator(".ic-image-block")).to_be_visible()
+                    await expect(page.locator(".ic-catalog-block .ic-schema-field")).to_have_count(3)
                     await page.locator(".ic-schema-field").nth(0).get_by_label("Hidden", exact=True).check()
                     await page.locator(".ic-schema-field").nth(1).get_by_role("button", name="Remove property", exact=True).click()
                     await page.get_by_role("button", name="Add property", exact=True).click()
                     await page.get_by_label("Property 3 name", exact=True).fill("rating")
                     await page.get_by_label("Property 3 type", exact=True).select_option("Integer")
-                    await page.get_by_role("button", name="Save Catalog", exact=True).click()
+                    await page.get_by_role("button", name="Apply Fields", exact=True).click()
                     await expect(page.get_by_label("rating", exact=True)).to_have_value("0")
                     await expect(page.get_by_label("caption", exact=True)).to_have_count(0)
-                    await expect(page.get_by_label("seed", exact=True)).to_have_count(0)
                     assert await page.evaluate("window.catalogNode.outputs.map(output => output.name)") == ["IMAGE", "caption", "enabled", "rating"]
                     assert await page.evaluate("window.catalogNode.outputs[2].links") == [77]
-                    updated = backend.STORE.get(catalog_id)
-                    assert all("seed" not in entry["values"] and entry["values"]["rating"] == 0 for entry in updated["entries"])
-                    await page.get_by_role("button", name="Edit Catalog", exact=True).click()
-                    await page.locator(".ic-schema-field").nth(0).get_by_label("Hidden", exact=True).uncheck()
-                    await page.get_by_role("button", name="Save Catalog", exact=True).click()
-                    await expect(page.get_by_label("caption", exact=True)).to_be_visible()
-                    async with page.expect_download() as download_event:
+                    assert "seed" in backend.STORE.get(catalog_id)["entries"][0]["values"]
+                    await page.get_by_role("button", name="Restore workflow", exact=True).click()
+                    await expect(page.get_by_label("rating", exact=True)).to_have_value("0")
+                    await page.get_by_role("button", name="Queue workflow", exact=True).click()
+                    await page.wait_for_function("window.lastOutputs[3] === 0")
+                    assert "seed" in backend.STORE.get(catalog_id)["entries"][0]["values"]
+                    await page.get_by_role("button", name="Save Changes", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
+                    assert all("seed" not in entry["values"] and entry["values"]["rating"] == 0 for entry in backend.STORE.get(catalog_id)["entries"])
+                    async with page.expect_download() as downloaded:
                         await page.get_by_role("button", name="Export Catalog", exact=True).click()
-                    download = await download_event.value
-                    archive_path = await download.path()
+                    archive_path = await (await downloaded.value).path()
+                    await page.get_by_label("Catalog", exact=True).select_option("")
+                    await expect(page.locator(".ic-image-block")).to_have_count(0)
                     await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(archive_path)
                     await expect(page.locator(".ic-status")).to_have_text("Catalog imported.")
                     assert len(backend.STORE.list()["catalogs"]) == 2
                     imported_id = await page.evaluate("window.catalogNode.imageCatalog.state.catalogId")
                     assert imported_id != catalog_id
-                    imported = backend.STORE.get(imported_id)
-                    original = backend.STORE.get(catalog_id)
-                    assert imported["schema"] == original["schema"]
-                    assert [entry["values"] for entry in imported["entries"]] == [entry["values"] for entry in original["entries"]]
                     screenshots = ROOT / "test-results"
                     screenshots.mkdir(exist_ok=True)
                     await page.screenshot(path=str(screenshots / "catalog-browser-smoke.png"), full_page=True)
-                    await page.get_by_role("button", name="Delete catalog", exact=True).click()
+                    await page.get_by_role("button", name="Delete Catalog", exact=True).click()
                     await expect(page.get_by_role("button", name="Create Now", exact=True)).to_be_visible()
-                    assert len(backend.STORE.list()["catalogs"]) == 1
                     await page.get_by_label("Catalog", exact=True).select_option(catalog_id)
-                    await page.get_by_role("button", name="Delete catalog", exact=True).click()
+                    await page.get_by_role("button", name="Delete Catalog", exact=True).click()
                     await expect(page.get_by_role("button", name="Create Now", exact=True)).to_be_visible()
                     assert backend.STORE.list()["catalogs"] == []
-                    await expect(page.get_by_label("Index after queue", exact=True)).to_have_value("increment")
                     assert errors == [], errors
-                    print("Browser smoke passed: drafts, typed values, restore, schema add/remove/hide, preserved outputs, ZIP export/import, action divider, deletion.")
+                    print("Browser smoke passed: separate blocks, local workflow state, explicit save/delete, draft uploads, schema editing, export choices, ZIP import.")
                 finally:
                     await browser.close()
         finally:

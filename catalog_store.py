@@ -100,6 +100,8 @@ def validate_catalog(data, catalog_id=None):
         if not isinstance(data["entries"], list):
             raise CatalogError("Invalid catalog entries.")
         data["schema"] = validate_schema(data["schema"])
+        if type(data.setdefault("revision", 0)) is not int or data["revision"] < 0:
+            raise CatalogError("Invalid catalog revision.")
         revision = data.setdefault("schema_revision", 0)
         if type(revision) is not int or revision < 0:
             raise CatalogError("Invalid schema revision.")
@@ -236,6 +238,7 @@ class CatalogStore:
                 entry["revision"] += 1
             data["schema"] = schema
             data["schema_revision"] += 1
+            data["revision"] += 1
             data["applied_operations"] = []
             self._write(self._child(self._directory(catalog_id), "catalog.json"), data)
             return data
@@ -311,7 +314,98 @@ class CatalogStore:
                     image.unlink(missing_ok=True)
                 raise
 
-    def execute(self, catalog_id, image_index, state, load_image):
+    def _client_sources(self, original, client):
+        """Resolve only images owned by this catalog or its staged uploads."""
+        existing = {entry["id"]: entry for entry in original["entries"]}
+        sources, staged = {}, {}
+        directory = self._directory(original["id"])
+        staging = self._child(self.root, ".staging")
+        for entry in client["entries"]:
+            token = entry["id"]
+            if token in existing:
+                sources[token] = self._child(directory, existing[token]["file"])
+            else:
+                try:
+                    metadata = json.loads(self._child(staging, token + ".json").read_text(encoding="utf-8"))
+                except FileNotFoundError as error:
+                    raise CatalogError("Image is missing or its upload expired. Select the file again.") from error
+                if metadata.get("catalog_id") != original["id"]:
+                    raise CatalogError("Upload belongs to another catalog.")
+                sources[token] = staged[token] = self._child(staging, token + ".png")
+            if not sources[token].is_file():
+                raise CatalogError("Catalog image file is missing.")
+        return sources, staged
+
+    def read_client(self, catalog_id, image_index, state, load_image):
+        """Execute the workflow's catalog snapshot without persisting changes."""
+        if type(image_index) is not int or image_index < 0:
+            raise CatalogError("image_index must be a non-negative integer.")
+        with self.lock:
+            original = self._read(catalog_id)
+            client = validate_catalog(copy.deepcopy(state.get("client_catalog")), catalog_id)
+            sources, _ = self._client_sources(original, client)
+            visible = visible_entries(client)
+            selected = next((entry for entry in visible if entry["id"] == state.get("new_selection")), None)
+            if selected is None or state.get("index_connected"):
+                selected = visible[image_index % len(visible)] if visible else None
+            return {"image": load_image(sources[selected["id"]]) if selected else None,
+                    "values": [selected["values"][field["name"]] for field in client["schema"]] if selected else [],
+                    "catalog_id": catalog_id, "selected_id": selected["id"] if selected else None,
+                    "client_only": True, "saved": False, "warnings": []}
+
+    def save_client(self, catalog_id, client, expected_revision, operation_id):
+        """Atomically save all client records, fields, and staged images."""
+        client = validate_catalog(copy.deepcopy(client), catalog_id)
+        operation_id = validate_id(operation_id)
+        with self.lock:
+            original = self._read(catalog_id)
+            if operation_id in original["applied_operations"]:
+                return {"catalog": original, "warnings": []}
+            if type(expected_revision) is not int or expected_revision != original["revision"]:
+                raise CatalogConflict("Catalog changed on the server. Save the workflow or copy your local edits before reloading.")
+            if client["name"] != original["name"]:
+                raise CatalogError("The catalog name cannot be changed here.")
+            types = {field["name"]: field["type"] for field in original["schema"]}
+            if any(field["name"] in types and types[field["name"]] != field["type"] for field in client["schema"]):
+                raise CatalogError("Existing property types cannot be changed.")
+            _, staged = self._client_sources(original, client)
+            previous = {entry["id"]: entry for entry in original["entries"]}
+            for entry in client["entries"]:
+                old = previous.get(entry["id"])
+                changed = old and any(old[key] != entry[key] for key in ("values", "hidden", "filename"))
+                entry["revision"] = old["revision"] + int(bool(changed)) if old else 1
+            client["revision"] = original["revision"] + 1
+            client["schema_revision"] = original["schema_revision"] + int(client["schema"] != original["schema"])
+            client["applied_operations"] = (original["applied_operations"] + [operation_id])[-128:]
+            directory = self._directory(catalog_id)
+            destinations = []
+            try:
+                for token, path in staged.items():
+                    destination = self._child(directory, token + ".png")
+                    with path.open("rb") as source, destination.open("xb") as target:
+                        destinations.append(destination)
+                        shutil.copyfileobj(source, target)
+                        target.flush()
+                        os.fsync(target.fileno())
+                self._write(self._child(directory, "catalog.json"), client)
+            except Exception:
+                for destination in destinations:
+                    destination.unlink(missing_ok=True)
+                raise
+            retained = {entry["id"] for entry in client["entries"]}
+            cleanup = [self._child(directory, entry["file"]) for entry in original["entries"] if entry["id"] not in retained]
+            for path in staged.values():
+                cleanup.extend((path, path.with_suffix(".json")))
+            warnings = []
+            for path in cleanup:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    logging.exception("Could not remove an unreferenced catalog file: %s", path)
+                    warnings.append("Some unreferenced files could not be removed. Check the server log.")
+            return {"catalog": client, "warnings": sorted(set(warnings))}
+
+    def execute(self, catalog_id, image_index, state, load_image, persist=True):
         """Resolve outputs and atomically commit edits after image decoding succeeds."""
         if type(image_index) is not int or image_index < 0:
             raise CatalogError("image_index must be a non-negative integer.")
@@ -408,10 +502,11 @@ class CatalogStore:
                 if not save and selected["id"] in edits:
                     values = validate_values(data["schema"], edits[selected["id"]]["values"])
                 output_values = [values[field["name"]] for field in data["schema"]]
-            if changed:
+            if changed and persist:
                 # Copy images, publish metadata, then clean obsolete files. This
                 # avoids live metadata that points to a removed image.
                 data["applied_operations"] = (data["applied_operations"] + [operation])[-128:]
+                data["revision"] += 1
                 destinations = []
                 try:
                     for token, staged_path in staged_paths.items():

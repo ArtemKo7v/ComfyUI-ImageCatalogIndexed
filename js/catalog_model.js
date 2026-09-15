@@ -29,19 +29,19 @@ export function nextIndex(index, count, mode, random = Math.random) {
   return wrapIndex(index + (mode === "increment" ? 1 : mode === "decrement" ? -1 : 0), count);
 }
 
-/** Build the visible entry sequence used by an execution. */
-export function executionEntries(catalog, edits, saveChanges, pendingNew) {
-  // Mirror backend selection: only saved hide/delete edits affect visible indexes.
-  const entries = catalog.entries.filter((entry) => {
-    const edit = saveChanges ? edits[entry.id] : null;
-    return !(edit ? edit.delete || edit.hidden : entry.hidden);
+/** Materialize every local edit without mutating the saved baseline. */
+export function buildClientCatalog(catalog, schema, edits, drafts) {
+  if (!catalog) return null;
+  const entries = catalog.entries.filter((entry) => !edits[entry.id]?.delete).map((entry) => {
+    const edit = edits[entry.id];
+    return { ...entry, values: migrateValues(schema, edit?.values || entry.values), hidden: edit?.hidden ?? entry.hidden };
   });
-  for (const image of Array.isArray(pendingNew) ? pendingNew : pendingNew ? [pendingNew] : []) {
-    if (!entries.some((entry) => entry.id === image.token) && !catalog.entries.some((entry) => entry.id === image.token)) {
-      entries.push({ id: image.token, filename: image.filename, values: image.values, hidden: false });
-    }
+  for (const draft of drafts.filter((image) => image.filename)) {
+    if (catalog.entries.some((entry) => entry.id === draft.token)) continue;
+    entries.push({ id: draft.token, file: `${draft.token}.png`, filename: draft.filename,
+      values: migrateValues(schema, draft.values), hidden: false, revision: 1 });
   }
-  return entries;
+  return { ...catalog, schema, entries };
 }
 
 /** Map a schema to named ComfyUI output definitions. */

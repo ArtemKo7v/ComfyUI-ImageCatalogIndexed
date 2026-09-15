@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
-import { defaultValues, executionEntries, identifier, migrateValues, nextIndex, outputDefinitions, wrapIndex } from "./catalog_model.js";
-import { button, element, installStyles, label, renderCatalog, renderCatalogEditor, renderCreate, select } from "./catalog_ui.js";
+import { buildClientCatalog, defaultValues, identifier, migrateValues, nextIndex, outputDefinitions, wrapIndex } from "./catalog_model.js";
+import { button, element, exportChoice, installStyles, label, renderCatalog, renderCatalogEditor, renderCreate, select } from "./catalog_ui.js";
 
 const NODE_CLASS = "ArtemKo7vImageCatalogIndexed";
 const PREFIX = "/artemko7v/image-catalog";
@@ -32,7 +32,6 @@ export class CatalogController {
     // Local files and upload promises cannot be serialized into workflow JSON.
     this.files = new Map();
     this.uploads = new Map();
-    this.queuedEdits = new Map();
     this.loadSequence = 0;
     this.state = this.freshState();
     this.root = element("div", "image-catalog");
@@ -68,7 +67,7 @@ export class CatalogController {
 
 /** Create the default serializable controller state. */
   freshState() {
-    return { catalogId: "", schema: [], catalogName: "", selectedId: "", edits: {}, saveChanges: false,
+    return { catalogId: "", catalogData: null, schema: [], catalogName: "", selectedId: "", edits: {},
       indexMode: this.indexModeWidget?.value || "fixed", adding: false, newImages: [], draftToken: "", newSelection: true, operationId: identifier(),
       createName: "", createSchema: [{ name: "", type: "String" }], catalogEdit: null };
   }
@@ -87,6 +86,7 @@ export class CatalogController {
   persist() {
     // Keep node properties and the hidden backend widget on the same snapshot.
     this.node.properties ||= {};
+    this.state.catalogData = this.catalog;
     this.node.properties.imageCatalog = structuredClone(this.state);
     this.stateWidget.value = JSON.stringify(this.snapshot());
     this.node.setDirtyCanvas(true, true);
@@ -104,15 +104,27 @@ export class CatalogController {
     // Empty draft rows are a UI aid; only filename-bearing drafts can execute.
     return { catalog_id: this.state.catalogId, schema: this.state.schema, edits: this.state.edits,
       schema_revision: this.catalog?.schema_revision ?? 0,
-      save_changes: this.state.saveChanges, operation_id: this.state.operationId, instance_id: this.id,
+      client_catalog: this.workingCatalog(), operation_id: this.state.operationId, instance_id: this.id,
       index_connected: this.connected, index_mode: this.state.indexMode,
       new_images: this.state.newImages.filter((image) => image.filename),
       new_selection: this.state.adding && this.state.newSelection ? this.newImage?.token : null };
   }
 
-/** Restore saved workflow state and reload server catalog data. */
+/** Build the complete client catalog without changing the saved baseline. */
+  workingCatalog() {
+    return buildClientCatalog(this.catalog, this.state.schema, this.state.edits, this.state.newImages);
+  }
+
+/** Compare persisted content, ignoring transient editor selection and blank drafts. */
+  hasUnsavedChanges() {
+    if (!this.catalog) return false;
+    const content = (catalog) => JSON.stringify({ schema: catalog.schema, entries: catalog.entries });
+    return content(this.workingCatalog()) !== content(this.catalog);
+  }
+
+/** Restore the workflow's local catalog without replacing it with server data. */
   async restore() {
-    // Accept the earlier single-draft workflow format before reloading catalog data.
+    // Accept the earlier single-draft workflow format before restoring local data.
     const saved = this.node.properties?.imageCatalog;
     if (saved) this.state = { ...this.freshState(), ...structuredClone(saved) };
     if (saved?.newImage && !saved.newImages) {
@@ -120,11 +132,13 @@ export class CatalogController {
       this.state.draftToken = saved.newImage.token;
     }
     delete this.state.newImage;
+    this.catalog = this.state.catalogData || null;
     this.indexModeWidget.value = this.state.indexMode;
     this.syncOutputs();
     this.render();
     await this.refreshList();
-    if (this.state.catalogId) await this.loadCatalog(this.state.catalogId, true);
+    if (this.state.catalogId && !this.catalog) await this.loadCatalog(this.state.catalogId, true);
+    else this.persist();
   }
 
 /** Run a UI action and present any thrown error. */
@@ -215,53 +229,45 @@ export class CatalogController {
 /** Open a revision-aware schema editor. */
   async editCatalog() {
     if (!this.catalog) return;
-    const catalogId = this.state.catalogId;
-    const catalog = await request(`/catalogs/${catalogId}`);
-    if (this.state.catalogId !== catalogId) return;
-    this.state.catalogEdit = { catalogId, revision: catalog.schema_revision ?? 0,
-      original: structuredClone(catalog.schema),
-      fields: catalog.schema.map((field) => ({ ...field, existing: true })) };
+    this.state.catalogEdit = { catalogId: this.state.catalogId,
+      original: structuredClone(this.state.schema),
+      fields: this.state.schema.map((field) => ({ ...field, existing: true })) };
     this.persist();
     this.render();
   }
 
-/** Save schema changes and update related node instances. */
+/** Apply schema changes to this workflow's local catalog only. */
   async saveCatalogSchema() {
     const editor = this.state.catalogEdit;
     const schema = editor.fields.filter((field) => field.name.trim()).map((field) => ({
       name: field.name.trim(), type: field.type, ...(field.hidden ? { hidden: true } : {}),
     }));
+    const names = schema.map((field) => field.name.toLowerCase());
+    if (new Set(names).size !== names.length || names.includes("image")) throw new Error("Property names must be unique and cannot be IMAGE.");
     const removed = editor.original.filter((field) => !schema.some((next) => next.name === field.name));
     if (removed.length && !window.confirm(`Remove properties ${removed.map((field) => `"${field.name}"`).join(", ")} and their values from every image?`)) return;
-    const catalog = await request(`/catalogs/${editor.catalogId}/schema`, jsonRequest("PATCH", {
-      schema, expected_revision: editor.revision,
-    }));
-    for (const controller of controllers.values()) {
-      if (controller.state.catalogId !== catalog.id) continue;
-      const previousRevision = controller.catalog?.schema_revision ?? 0;
-      if (previousRevision === catalog.schema_revision) continue;
-      // Rebase only edits whose record was changed solely by this schema update.
-      for (const [id, edit] of Object.entries(controller.state.edits)) {
-        const saved = catalog.entries.find((entry) => entry.id === id);
-        if (previousRevision === editor.revision && saved?.revision === edit.revision + 1) edit.revision = saved.revision;
-      }
-      controller.migrateDraftValues(catalog.schema);
-      controller.catalog = catalog;
-      controller.state.schema = catalog.schema;
-      controller.syncOutputs();
-      controller.touch();
-      controller.render();
-    }
+    // Materialize overlays before dropping fields so re-adding a field gets defaults.
+    for (const entry of this.catalog.entries) this.editEntry(entry);
+    this.migrateDraftValues(schema);
+    this.state.schema = schema;
+    this.syncOutputs();
+    this.touch();
     if (this.state.catalogEdit === editor) {
       this.state.catalogEdit = null;
       this.persist();
       this.render();
-      this.status("Catalog fields saved.");
+      this.status("Fields applied locally. Use Save Changes to save the entire catalog.");
     }
   }
 
 /** Download the active catalog as a ZIP archive. */
   async exportCatalog() {
+    if (this.state.catalogEdit) throw new Error("Apply or cancel field editing before exporting.");
+    if (this.hasUnsavedChanges()) {
+      const choice = await exportChoice();
+      if (choice === "cancel") return;
+      if (choice === "save") await this.saveChanges(false);
+    }
     const catalogId = this.state.catalogId;
     const catalogName = this.state.catalogName;
     const response = await api.fetchApi(`${PREFIX}/catalogs/${catalogId}/export`);
@@ -275,6 +281,53 @@ export class CatalogController {
     download.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
     this.status("Saved catalog exported as ZIP.");
+  }
+
+/** Save every local image and field change as one revision-checked transaction. */
+  async saveChanges(confirm = true) {
+    if (this.busy) throw new Error("A catalog save is already in progress.");
+    if (this.state.catalogEdit) throw new Error("Apply or cancel field editing before saving.");
+    if (confirm && !window.confirm("Save all changes for all images and catalog fields? Deleted images will be permanently removed from the server.")) return;
+    const snapshot = structuredClone(this.snapshot());
+    this.busy = true;
+    this.root.inert = true;
+    this.status("Saving all catalog changes...");
+    try {
+      await this.prepareQueue(snapshot);
+      const result = await request(`/catalogs/${snapshot.catalog_id}/save`, jsonRequest("POST", {
+        catalog: snapshot.client_catalog, expected_revision: this.catalog.revision ?? 0, operation_id: snapshot.operation_id,
+      }));
+      if (this.disposed || this.state.catalogId !== snapshot.catalog_id) return;
+      const selectedId = this.state.adding ? this.state.draftToken : this.state.selectedId;
+      this.catalog = result.catalog;
+      this.state.edits = {};
+      this.state.newImages = this.state.newImages.filter((draft) => !draft.filename);
+      this.files.clear();
+      this.uploads.clear();
+      if (this.catalog.entries.some((entry) => entry.id === selectedId)) this.selectEntry(selectedId);
+      else if (!this.newImage) {
+        this.state.adding = false;
+        this.selectIndex(false);
+      }
+      this.touch();
+      this.render();
+      this.status(result.warnings.length ? result.warnings.join("\n") : "All catalog changes saved.", Boolean(result.warnings.length));
+    } finally {
+      this.busy = false;
+      this.root.inert = false;
+    }
+  }
+
+/** Remove an image locally; its server file is retained until Save Changes. */
+  deleteImage() {
+    if (!window.confirm("Delete this image from the local catalog? The server file will be removed only when you save all changes.")) return;
+    if (this.state.adding) return this.removeDraft();
+    const entry = this.catalog.entries.find((item) => item.id === this.state.selectedId);
+    if (!entry) return;
+    this.editEntry(entry).delete = true;
+    this.selectIndex(false);
+    this.touch();
+    this.render();
   }
 
 /** Import an archive and select the new catalog. */
@@ -311,10 +364,19 @@ export class CatalogController {
 
 /** Select the record at the visible image index. */
   selectIndex(render = true) {
-    const entries = this.catalog?.entries.filter((entry) => !entry.hidden) || [];
+    const catalog = this.workingCatalog();
+    const entries = catalog?.entries.filter((entry) => !entry.hidden) || [];
     const index = wrapIndex(Number(this.indexWidget.value) || 0, entries.length);
     this.indexWidget.value = index;
-    this.state.selectedId = entries[index]?.id || this.catalog?.entries[0]?.id || "";
+    this.state.selectedId = entries[index]?.id || catalog?.entries[0]?.id || "";
+    const draft = this.state.newImages.find((image) => image.token === this.state.selectedId);
+    if (draft) {
+      this.state.adding = true;
+      this.state.draftToken = draft.token;
+      this.releasePreview();
+      const file = this.files.get(draft.token);
+      if (file) this.previewUrl = URL.createObjectURL(file);
+    }
     if (render) this.render();
   }
 
@@ -323,7 +385,7 @@ export class CatalogController {
     this.releasePreview();
     this.state.adding = false;
     this.state.selectedId = id;
-    const index = this.catalog.entries.filter((entry) => !entry.hidden).findIndex((entry) => entry.id === id);
+    const index = this.workingCatalog().entries.filter((entry) => !entry.hidden).findIndex((entry) => entry.id === id);
     if (index >= 0 && !this.connected) this.indexWidget.value = index;
     this.persist();
     this.render();
@@ -376,7 +438,7 @@ export class CatalogController {
 
 /** Return the local mutable edit overlay for an entry. */
   editEntry(entry) {
-    this.state.edits[entry.id] ||= { values: { ...entry.values }, hidden: entry.hidden, delete: false, revision: entry.revision };
+    this.state.edits[entry.id] ||= { values: migrateValues(this.state.schema, entry.values), hidden: entry.hidden, delete: false, revision: entry.revision };
     return this.state.edits[entry.id];
   }
 
@@ -413,16 +475,18 @@ export class CatalogController {
     if (this.state.catalogId && !this.catalogs.some((item) => item.id === this.state.catalogId)) {
       options.push([this.state.catalogId, this.state.catalogName || "Unavailable catalog"]);
     }
-    this.root.append(label("Catalog", select(options, this.state.catalogId, (id) => this.run(() => this.loadCatalog(id)))));
+    const catalogBlock = element("section", "ic-block ic-catalog-block");
+    const selectorRow = element("div", "ic-selector-row");
+    selectorRow.append(label("Catalog", select(options, this.state.catalogId, (id) => this.run(async () => {
+      if ((this.hasUnsavedChanges() || this.state.catalogEdit) && !window.confirm("Discard local changes and switch catalogs?")) {
+        this.render();
+        return;
+      }
+      await this.loadCatalog(id);
+    }))), button("Refresh", () => this.run(() => this.refreshList())));
+    catalogBlock.append(selectorRow);
     this.statusElement = element("div", "ic-status" + (this.isError ? " is-error" : ""), this.message || "");
-    this.root.append(this.statusElement);
-    if (!this.state.catalogId) renderCreate(this);
-    else if (this.catalog && this.state.catalogEdit) renderCatalogEditor(this);
-    else if (this.catalog) renderCatalog(this);
-    else this.root.append(element("p", "ic-help", "Loading catalog..."));
-    this.root.append(element("hr", "ic-divider"));
     const actions = element("div", "ic-actions ic-catalog-actions");
-    actions.append(button("Refresh catalogs", () => this.run(() => this.refreshList())));
     const archive = element("input");
     archive.type = "file";
     archive.accept = ".zip,application/zip";
@@ -433,16 +497,16 @@ export class CatalogController {
       archive.value = "";
       this.run(() => this.importCatalog(file));
     });
-    actions.append(button("Import Catalog", () => archive.click()), archive);
+    if (!this.state.catalogId) actions.append(button("Import Catalog", () => archive.click()), archive);
     if (this.state.catalogId) {
       actions.append(button("Edit Catalog", () => this.run(() => this.editCatalog())),
         button("Export Catalog", () => this.run(() => this.exportCatalog())));
-      actions.append(button("Reload catalog", () => this.run(async () => {
-        if ((Object.keys(this.state.edits).length || this.state.newImages.length) &&
+      actions.append(button("Reload Catalog", () => this.run(async () => {
+        if ((this.hasUnsavedChanges() || this.state.catalogEdit) &&
           !window.confirm("Discard pending edits and reload this catalog?")) return;
         await this.loadCatalog(this.state.catalogId);
       })));
-      const remove = button("Delete catalog", () => this.run(async () => {
+      const remove = button("Delete Catalog", () => this.run(async () => {
         const { catalogId, catalogName } = this.state;
         if (!window.confirm(`Delete catalog "${catalogName}" and all its images? This cannot be undone.`)) return;
         await request(`/catalogs/${catalogId}`, jsonRequest("DELETE", { confirm: catalogId }));
@@ -454,15 +518,23 @@ export class CatalogController {
       remove.className = "ic-danger";
       actions.append(remove);
     }
-    this.root.append(actions);
+    catalogBlock.append(actions);
+    if (!this.state.catalogId || this.state.catalogEdit) catalogBlock.append(element("hr", "ic-divider"));
+    if (!this.state.catalogId) renderCreate(this, catalogBlock);
+    else if (this.catalog && this.state.catalogEdit) renderCatalogEditor(this, catalogBlock);
+    this.root.append(catalogBlock, this.statusElement);
+    if (this.catalog) {
+      const imageBlock = element("section", "ic-block ic-image-block");
+      renderCatalog(this, imageBlock);
+      this.root.append(imageBlock);
+    }
   }
 
 /** Validate queued state and stage each local image upload. */
   async prepareQueue(state) {
     // Validate browser-only values and stage every local file before queuing.
     if (!this.catalog || this.catalog.id !== state.catalog_id) throw new Error("Wait for the image catalog to load before running.");
-    if (!state.new_images.length && !this.catalog.entries.length) throw new Error("Select at least one image before running.");
-    for (const values of [...Object.values(state.edits).map((edit) => edit.values), ...state.new_images.map((image) => image.values)]) {
+    for (const { values } of state.client_catalog.entries) {
       for (const field of state.schema) {
         if (field.type === "Integer" && !Number.isSafeInteger(values[field.name])) {
           throw new Error(`Enter a valid integer for '${field.name}'.`);
@@ -472,7 +544,7 @@ export class CatalogController {
     for (const image of state.new_images) {
       const { token } = image;
       const file = this.files.get(token);
-      if (!file) throw new Error(`Select '${image.filename}' again before running. Local files cannot be restored from workflow JSON.`);
+      if (!file) throw new Error(`Select '${image.filename}' again before running or saving. Local files cannot be restored from workflow JSON.`);
     }
     for (const { token } of state.new_images) {
       const file = this.files.get(token);
@@ -485,76 +557,35 @@ export class CatalogController {
       }
       await this.uploads.get(token);
     }
-    this.queuedEdits.set(state.operation_id, structuredClone(state.edits));
   }
 
 /** Update local state after prompt acceptance. */
   onQueued(snapshot, index) {
     // Advance the local index with the same visible-entry rules as the backend.
     if (this.disposed || snapshot.catalog_id !== this.state.catalogId) return;
-    if (snapshot.new_images.some((image) => this.state.newImages.some((draft) => draft.token === image.token))) {
-      this.pendingNewToken = snapshot.new_images[0].token;
-      this.render();
-    }
     if (snapshot.index_connected) return;
-    const entries = executionEntries(this.catalog, snapshot.edits, snapshot.save_changes, snapshot.new_images);
+    const entries = snapshot.client_catalog.entries.filter((entry) => !entry.hidden);
     const selectedNew = entries.findIndex((entry) => entry.id === snapshot.new_selection);
     const selected = selectedNew >= 0 ? selectedNew : index;
     this.indexWidget.value = nextIndex(selected, entries.length, snapshot.index_mode);
     this.state.newSelection = false;
     if (!this.state.adding) {
-      this.state.selectedId = entries[this.indexWidget.value]?.id || this.state.selectedId;
+      this.selectIndex(false);
       this.render();
     }
     this.persist();
   }
 
-/** Reconcile execution results with local drafts and edits. */
+/** Report read-only execution without replacing the local catalog. */
   onExecuted(result) {
-    // Keep newer local edits when a result belongs to another node instance.
-    if (result.catalog.id !== this.state.catalogId) return;
-    if ((result.catalog.schema_revision ?? 0) < (this.catalog?.schema_revision ?? 0)) return;
-    this.catalog = result.catalog;
-    const acknowledged = result.operation_id === this.state.operationId;
-    if (acknowledged && result.saved) this.state.edits = {};
-    else if (result.saved) {
-      const submitted = this.queuedEdits.get(result.operation_id) || {};
-      for (const [id, edit] of Object.entries(this.state.edits)) {
-        const previous = submitted[id];
-        if (!previous) continue;
-        if (JSON.stringify(edit) === JSON.stringify(previous)) delete this.state.edits[id];
-        else {
-          const saved = result.catalog.entries.find((entry) => entry.id === id);
-          if (saved && edit.revision === previous.revision && saved.revision === previous.revision + 1) edit.revision = saved.revision;
-        }
-      }
+    if (result.catalog_id && result.catalog_id !== this.state.catalogId) return;
+    if (this.connected && result.selected_id) {
+      const draft = this.state.newImages.find((image) => image.token === result.selected_id);
+      if (draft) this.selectDraft(draft.token);
+      else if (this.workingCatalog()?.entries.some((entry) => entry.id === result.selected_id)) this.selectEntry(result.selected_id);
     }
-    this.queuedEdits.delete(result.operation_id);
-    const addedIds = new Set(result.added_ids || (result.added_id ? [result.added_id] : []));
-    for (const draft of this.state.newImages.filter((image) => addedIds.has(image.token))) {
-      const added = result.catalog.entries.find((entry) => entry.id === draft.token);
-      if (!acknowledged && added && JSON.stringify(added.values) !== JSON.stringify(draft.values)) {
-        this.state.edits[added.id] = { values: { ...draft.values }, hidden: false, delete: false, revision: added.revision };
-        this.state.saveChanges = true;
-      }
-    }
-    this.state.newImages = this.state.newImages.filter((image) => !addedIds.has(image.token));
-    if (addedIds.has(this.state.draftToken)) {
-      this.releasePreview();
-      this.state.draftToken = this.state.newImages[0]?.token || "";
-      this.state.adding = Boolean(this.newImage);
-      const file = this.files.get(this.state.draftToken);
-      if (file) this.previewUrl = URL.createObjectURL(file);
-    }
-    if (addedIds.has(this.pendingNewToken)) this.pendingNewToken = null;
-    if (!this.state.adding) {
-      if (this.connected && result.selected_id) this.state.selectedId = result.selected_id;
-      else this.selectIndex(false);
-    }
-    this.persist();
-    this.render();
-    this.status(result.warnings?.length ? result.warnings.join("\n") :
-      result.selected_id ? "Catalog execution completed." : "No visible images. Downstream nodes were skipped.", Boolean(result.warnings?.length));
+    this.status(result.selected_id ? (this.hasUnsavedChanges() ? "Workflow completed. Local changes have not been saved." : "Workflow completed.") :
+      "No visible images. Downstream nodes were skipped.");
   }
 
 /** Release DOM and in-memory resources for a removed node. */

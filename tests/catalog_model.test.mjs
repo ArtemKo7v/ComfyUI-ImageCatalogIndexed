@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { defaultValues, executionEntries, migrateValues, nextIndex, outputDefinitions } from "../js/catalog_model.js";
+import { buildClientCatalog, defaultValues, migrateValues, nextIndex, outputDefinitions } from "../js/catalog_model.js";
 
 test("index controls wrap and randomize over visible records", () => {
   assert.equal(nextIndex(2, 3, "increment"), 0);
@@ -10,12 +10,13 @@ test("index controls wrap and randomize over visible records", () => {
   assert.equal(nextIndex(2, 0, "increment"), 0);
 });
 
-test("queued edits affect indexing only when saved", () => {
-  const catalog = { entries: [{ id: "a", hidden: false }, { id: "b", hidden: true }, { id: "c", hidden: false }] };
+test("local edits affect visible indexing without mutating saved entries", () => {
+  const catalog = { entries: [{ id: "a", hidden: false, values: {} }, { id: "b", hidden: true, values: {} }, { id: "c", hidden: false, values: {} }] };
+  const original = structuredClone(catalog);
   const edits = { a: { hidden: false, delete: true }, b: { hidden: false, delete: false } };
-  assert.deepEqual(executionEntries(catalog, edits, false, null).map((entry) => entry.id), ["a", "c"]);
-  assert.deepEqual(executionEntries(catalog, edits, true, { token: "d" }).map((entry) => entry.id), ["b", "c", "d"]);
-  assert.deepEqual(executionEntries(catalog, {}, false, { token: "a" }).map((entry) => entry.id), ["a", "c"]);
+  const client = buildClientCatalog(catalog, [], edits, []);
+  assert.deepEqual(client.entries.filter((entry) => !entry.hidden).map((entry) => entry.id), ["b", "c"]);
+  assert.deepEqual(catalog, original);
 });
 
 test("schema determines typed output order and default values", () => {
@@ -26,9 +27,10 @@ test("schema determines typed output order and default values", () => {
 });
 
 test("all pending images participate in index advancement without duplicates", () => {
-  const catalog = { entries: [{ id: "a", hidden: false }] };
-  const pending = [{ token: "b" }, { token: "c" }, { token: "a" }];
-  const entries = executionEntries(catalog, {}, false, pending);
+  const catalog = { entries: [{ id: "a", hidden: false, values: {} }] };
+  const pending = ["b", "c", "a"].map((token) => ({ token, filename: `${token}.png`, values: {} }));
+  pending.push({ token: "blank", filename: "", values: {} });
+  const { entries } = buildClientCatalog(catalog, [], {}, pending);
   assert.deepEqual(entries.map((entry) => entry.id), ["a", "b", "c"]);
   assert.equal(nextIndex(2, entries.length, "increment"), 0);
 });

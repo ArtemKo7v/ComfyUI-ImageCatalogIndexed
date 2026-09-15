@@ -72,7 +72,15 @@ export function installStyles() {
     .image-catalog .ic-record.is-hidden { opacity: .45; }
     .image-catalog .ic-record.is-deleted { background: #702626; opacity: .5; }
     .image-catalog .ic-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
-    .image-catalog .ic-danger { border-color: #b65e5e; color: #ffb5b5; }
+    .image-catalog .ic-danger { border-color: #b65e5e; color: #fff; background: #832e2e; }
+    .image-catalog .ic-block { border: 1px solid var(--border-color, #555); border-radius: 6px; padding: 10px; }
+    .image-catalog .ic-image-block { margin-top: 12px; }
+    .image-catalog .ic-selector-row { display: flex; align-items: end; gap: 8px; }
+    .image-catalog .ic-selector-row > .ic-field { flex: 1; min-width: 0; margin: 0; }
+    .image-catalog .ic-delete-actions { justify-content: flex-end; }
+    .ic-export-dialog { color: #ddd; background: #252525; border: 1px solid #666; border-radius: 8px; max-width: 440px; padding: 20px; }
+    .ic-export-dialog::backdrop { background: #0008; }
+    .ic-export-dialog button { margin: 8px 8px 0 0; padding: 8px; cursor: pointer; }
     .image-catalog .ic-status { white-space: pre-wrap; margin: 8px 0; color: #b8c3ce; }
     .image-catalog .ic-status.is-error { color: #ffaaaa; }
     .image-catalog textarea { resize: vertical; min-height: 70px; }
@@ -84,9 +92,9 @@ export function installStyles() {
 }
 
 /** Render catalog creation controls and the initial schema rows. */
-export function renderCreate(controller) {
+export function renderCreate(controller, root = controller.root) {
   // Keep one blank schema row ready until the property limit is reached.
-  const { state, root } = controller;
+  const { state } = controller;
   const name = element("input");
   name.placeholder = "Catalog name";
   name.maxLength = 120;
@@ -122,18 +130,20 @@ export function renderCreate(controller) {
 }
 
 /** Render the selected catalog record or image draft. */
-export function renderCatalog(controller) {
-  const { state, catalog, root } = controller;
+export function renderCatalog(controller, root = controller.root) {
+  const { state } = controller;
+  const catalog = controller.workingCatalog();
+  const storedEntries = catalog.entries.filter((entry) => !state.newImages.some((draft) => draft.token === entry.id));
   const entry = catalog.entries.find((item) => item.id === state.selectedId);
   if (catalog.entries.length || state.newImages.length) {
-    const options = catalog.entries.map((item) => [item.id, `${item.filename}${item.hidden ? " (hidden)" : ""} [${item.id.slice(0, 6)}]`]);
+    const options = storedEntries.map((item) => [item.id, `${item.filename}${item.hidden ? " (hidden)" : ""} [${item.id.slice(0, 6)}]`]);
     options.push(...state.newImages.map((image, index) => [`new:${image.token}`, `New ${index + 1}: ${image.filename || "Select a file"}`]));
     const imageSelect = select(options, state.adding ? `new:${state.draftToken}` : state.selectedId,
       (id) => id.startsWith("new:") ? controller.selectDraft(id.slice(4)) : controller.selectEntry(id));
     root.append(label("Image", imageSelect));
   }
   if (state.newImages.some((image) => image.filename)) {
-    root.append(element("p", "ic-help", `${state.newImages.filter((image) => image.filename).length} new image(s) will be uploaded when the workflow runs.`));
+    root.append(element("p", "ic-help", `${state.newImages.filter((image) => image.filename).length} new image(s). Workflow execution uses local changes; Save Changes persists them.`));
   }
   if (controller.connected) root.append(element("p", "ic-help", "The connected image_index selects the workflow output. Edits belong to the displayed record."));
   if (state.adding) {
@@ -186,35 +196,31 @@ export function renderCatalog(controller) {
     }
   }
   root.append(record);
-  if (!state.adding) {
-    root.append(checkbox("Save changes", state.saveChanges, (value) => { state.saveChanges = value; controller.touch(); }));
-    if (entry) {
-      root.append(checkbox("Hide", Boolean(hidden), (value) => { controller.editEntry(entry).hidden = value; controller.touch(); controller.render(); }),
-        checkbox("Delete", Boolean(deleted), (value) => { controller.editEntry(entry).delete = value; controller.touch(); controller.render(); }));
-    }
-    root.append(button("Add image", () => { controller.releasePreview(); controller.startAdding(); }));
-  } else {
-    const next = button("Add next image", () => controller.startAdding());
-    next.disabled = Boolean(controller.pendingNewToken) || !controller.newImage?.filename;
-    const remove = button("Remove draft", () => controller.removeDraft());
-    remove.disabled = Boolean(controller.pendingNewToken);
-    const actions = element("div", "ic-actions");
-    actions.append(next, remove);
-    root.append(actions);
+  if (!state.adding && entry) {
+    root.append(checkbox("Hide", Boolean(hidden), (value) => { controller.editEntry(entry).hidden = value; controller.touch(); controller.render(); }));
   }
+  const deleteActions = element("div", "ic-actions ic-delete-actions");
+  const remove = button("Delete", () => controller.deleteImage());
+  remove.className = "ic-danger";
+  remove.disabled = !entry && !controller.newImage;
+  deleteActions.append(remove);
+  const actions = element("div", "ic-actions ic-image-actions");
+  actions.append(button("Add Image", () => controller.startAdding()),
+    button("Save Changes", () => controller.run(() => controller.saveChanges())));
+  root.append(deleteActions, element("hr", "ic-divider"), actions);
   if (!catalog.entries.some((item) => !item.hidden) && !state.adding) {
-    root.append(element("p", "ic-help", "No visible images. Unhide a record with Save changes enabled, or add an image. Downstream nodes will be skipped."));
+    root.append(element("p", "ic-help", "No visible images. Unhide a record or add an image. Downstream nodes will be skipped."));
   }
 }
 
 /** Render the schema editor for the active catalog. */
-export function renderCatalogEditor(controller) {
+export function renderCatalogEditor(controller, root = controller.root) {
   // Existing names and types are immutable because values and output sockets
   // already depend on them; only new fields remain editable.
-  const { state, root } = controller;
+  const { state } = controller;
   const editor = state.catalogEdit;
   root.append(element("p", "", "Edit Catalog"), element("p", "ic-help",
-    "Hidden properties keep their values and outputs. Removing a property deletes its values from all images. Changes apply when you save this editor."));
+    "Hidden properties keep their values and outputs. Apply Fields updates the local catalog. Save Changes persists all fields and images to the server."));
   editor.fields.forEach((field, index) => {
     const card = element("div", "ic-schema-field");
     const row = element("div", "ic-row");
@@ -240,7 +246,7 @@ export function renderCatalogEditor(controller) {
     controller.render();
   });
   add.disabled = editor.fields.length >= MAX_PROPERTIES;
-  const save = button("Save Catalog", (event) => controller.run(async () => {
+  const save = button("Apply Fields", (event) => controller.run(async () => {
     event.target.disabled = true;
     try { await controller.saveCatalogSchema(); }
     finally { event.target.disabled = false; }
@@ -252,4 +258,19 @@ export function renderCatalogEditor(controller) {
     controller.render();
   }));
   root.append(actions);
+}
+
+/** Ask which persisted version to export without conflating discard and cancel. */
+export function exportChoice() {
+  return new Promise((resolve) => {
+    const dialog = element("dialog", "ic-export-dialog");
+    dialog.setAttribute("aria-label", "Export unsaved catalog");
+    dialog.append(element("p", "", "This catalog has unsaved changes. Save all changes for all images before exporting?"));
+    for (const [value, title] of [["save", "Save and Export"], ["saved", "Export Saved Version"], ["cancel", "Cancel"]]) {
+      dialog.append(button(title, () => dialog.close(value)));
+    }
+    dialog.addEventListener("close", () => { resolve(dialog.returnValue || "cancel"); dialog.remove(); }, { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
 }

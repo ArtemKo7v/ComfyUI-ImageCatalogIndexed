@@ -2,7 +2,7 @@
 [project]
 name = "comfyui-image-catalog-indexed"
 description = "ComfyUI node that lets the user store indexed collection of images with associated properties."
-version = "0.0.1"
+version = "0.0.2"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 # All runtime dependencies are supplied by ComfyUI; see requirements-dev.txt for tests.

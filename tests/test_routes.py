@@ -55,6 +55,12 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["result"][1], "A\nB")
         self.assertEqual(len(result["result"]), 33)
         self.assertAlmostEqual(float(result["result"][0][0, 0, 0, 0]), 1.0)
+        self.assertEqual(self.backend.STORE.get(catalog["id"])["entries"], [])
+        local = {**catalog, "entries": [{"id": token, "file": token + ".png", "filename": "example.png",
+                                        "values": {"caption": "A\nB"}, "hidden": False, "revision": 1}]}
+        saved = await self.client.post(f"{self.prefix}/catalogs/{catalog['id']}/save", json={
+            "catalog": local, "expected_revision": 0, "operation_id": uuid.uuid4().hex})
+        self.assertEqual(saved.status, 200, await saved.text())
         preview = await self.client.get(f"{self.prefix}/catalogs/{catalog['id']}/images/{token}")
         self.assertEqual(preview.status, 200)
         self.assertEqual(Image.open(BytesIO(await preview.read())).size, (7, 5))
@@ -89,7 +95,11 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         self.backend.STORE.stage(catalog["id"], token, png.getvalue(), "example.png")
         state = {"catalog_id": catalog["id"], "schema": catalog["schema"], "operation_id": uuid.uuid4().hex,
                  "new_images": [{"token": token, "values": {"caption": "Preserved text"}}]}
-        self.backend.ArtemKo7vImageCatalogIndexed().execute(0, json.dumps(state))
+        catalog["entries"] = [{"id": token, "file": token + ".png", "filename": "example.png",
+                               "values": {"caption": "Preserved text"}, "hidden": False, "revision": 1}]
+        saved = await self.client.post(f"{self.prefix}/catalogs/{catalog['id']}/save", json={
+            "catalog": catalog, "expected_revision": 0, "operation_id": uuid.uuid4().hex})
+        self.assertEqual(saved.status, 200, await saved.text())
         return catalog, token
 
     async def import_bytes(self, content):
@@ -111,6 +121,7 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         content = await exported.read()
         with zipfile.ZipFile(BytesIO(content)) as archive:
             self.assertEqual(set(archive.namelist()), {"catalog.json", token + ".png"})
+            self.assertEqual(archive.read("catalog.json"), (self.backend.STORE.root / catalog["id"] / "catalog.json").read_bytes())
         imported = await self.import_bytes(content)
         self.assertEqual(imported.status, 201, await imported.text())
         clone = await imported.json()

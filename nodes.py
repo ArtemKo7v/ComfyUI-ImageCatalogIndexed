@@ -68,14 +68,20 @@ class ArtemKo7vImageCatalogIndexed:
         return float("nan")
 
     def execute(self, image_index, catalog_state):
-        """Run the catalog transaction and shape the ComfyUI result."""
+        """Read the client catalog and shape the ComfyUI result without saving."""
         try:
             state = json.loads(catalog_state)
         except (ValueError, TypeError) as error:
             raise CatalogError("Invalid catalog state JSON.") from error
         if not isinstance(state, dict) or not state.get("catalog_id"):
             raise CatalogError("Select or create an image catalog before running.")
-        result = STORE.execute(state["catalog_id"], image_index, state, load_image)
+        if "client_catalog" in state:
+            result = STORE.read_client(state["catalog_id"], image_index, state, load_image)
+        else:
+            # Legacy workflow snapshots remain executable, but never commit on run.
+            result = STORE.execute(state["catalog_id"], image_index, state, load_image, persist=False)
+            result["client_only"] = True
+            result["saved"] = False
         if result["image"] is None:
             from comfy_execution.graph import ExecutionBlocker
 
@@ -162,6 +168,18 @@ async def download_catalog(request):
         return response
     finally:
         stream.close()
+
+
+@routes.post(API_PREFIX + "/catalogs/{catalog_id}/save")
+@route_errors
+async def save_catalog(request):
+    """Persist the complete client catalog independently of workflow execution."""
+    body = await request.json()
+    if not isinstance(body, dict):
+        raise CatalogError("Catalog request must be a JSON object.")
+    result = await asyncio.to_thread(STORE.save_client, request.match_info["catalog_id"],
+                                     body.get("catalog"), body.get("expected_revision"), body.get("operation_id"))
+    return web.json_response(result)
 
 
 def validate_imported_image(path):
