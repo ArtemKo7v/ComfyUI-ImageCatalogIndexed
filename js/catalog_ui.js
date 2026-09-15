@@ -46,6 +46,56 @@ export function checkbox(text, value, onChange) {
   return label(text, control);
 }
 
+/** Keep native file selection and file drops on the same draft upload path. */
+function imageUpload(controller) {
+  const zone = element("div", "ic-image-upload");
+  zone.setAttribute("role", "group");
+  zone.setAttribute("aria-label", "Image upload");
+  const file = element("input");
+  file.type = "file";
+  file.accept = "image/*";
+  file.disabled = Boolean(controller.pendingNewToken);
+  const choose = (files) => {
+    if (file.disabled || controller.busy || !files?.length) return;
+    if (files.length !== 1) {
+      controller.status("Drop one image at a time. Use Add Image for another image.", true);
+      return;
+    }
+    const image = files[0];
+    if (image.type && !image.type.startsWith("image/") &&
+      !/\.(png|jpe?g|jfif|webp|gif|bmp|tiff?|avif|heic|heif|ico)$/i.test(image.name)) {
+      controller.status("Please select an image file.", true);
+      return;
+    }
+    controller.status("");
+    controller.run(() => controller.chooseFile(image));
+  };
+  file.addEventListener("change", () => choose(file.files));
+  zone.append(label("Add image", file), element("p", "ic-help", "Drop an image here, or choose a file above."));
+  let dragDepth = 0;
+  for (const type of ["dragenter", "dragover", "dragleave", "drop"]) {
+    zone.addEventListener(type, (event) => {
+      // Do not let the canvas interpret an image drop as a workflow import.
+      event.preventDefault();
+      event.stopPropagation();
+      if (type === "drop" || type === "dragleave") {
+        dragDepth = type === "drop" ? 0 : Math.max(0, dragDepth - 1);
+        if (!dragDepth) zone.classList.remove("is-dragging");
+        if (type === "drop") choose(event.dataTransfer?.files);
+        return;
+      }
+      if (file.disabled || controller.busy) {
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "none";
+        return;
+      }
+      if (type === "dragenter") dragDepth++;
+      zone.classList.add("is-dragging");
+      if (event.dataTransfer) event.dataTransfer.dropEffect = "copy";
+    });
+  }
+  return zone;
+}
+
 /** Install the shared catalog-editor stylesheet once per page. */
 export function installStyles() {
   // Styles are shared by all node instances; install them once.
@@ -64,6 +114,8 @@ export function installStyles() {
     .image-catalog button:disabled { opacity: .5; cursor: default; }
     .image-catalog .ic-field { display: flex; flex-direction: column; gap: 4px; margin-bottom: 9px; }
     .image-catalog .ic-field:has(input[type=checkbox]) { flex-direction: row; align-items: center; justify-content: space-between; }
+    .image-catalog .ic-hidden-toggle { display: flex; align-items: center; justify-content: flex-start; gap: 6px; margin-bottom: 9px; }
+    .image-catalog .ic-hidden-toggle > input { margin: 0; }
     .image-catalog .ic-row { display: flex; gap: 6px; margin: 8px 0; }
     .image-catalog .ic-row > input { flex: 1; }
     .image-catalog .ic-row > select { width: 100px; flex: 0 0 100px; }
@@ -73,6 +125,9 @@ export function installStyles() {
     .image-catalog .ic-preview-navigation > button { grid-row: 1; padding: 6px 0; font-size: 20px; line-height: 1; }
     .image-catalog .ic-previous-image { grid-column: 1; }
     .image-catalog .ic-next-image { grid-column: 3; }
+    .image-catalog .ic-image-upload { padding: 20px; margin: 10px 0; border: 2px dashed var(--border-color, #666); border-radius: 6px; }
+    .image-catalog .ic-image-upload.is-dragging, .image-catalog .ic-image-upload:focus-within { border-color: #85bfff; background: #293c49; }
+    .image-catalog .ic-image-upload > .ic-help { margin-bottom: 0; }
     .image-catalog .ic-record { padding: 6px; border-radius: 5px; }
     .image-catalog .ic-record.is-hidden { opacity: .45; }
     .image-catalog .ic-record.is-deleted { background: #702626; opacity: .5; }
@@ -160,12 +215,7 @@ export function renderCatalog(controller, root = controller.root) {
   }
   if (controller.connected) root.append(element("p", "ic-help", "The connected image_index selects the workflow output. Edits belong to the displayed record."));
   if (state.adding) {
-    const file = element("input");
-    file.type = "file";
-    file.accept = "image/*";
-    file.disabled = Boolean(controller.pendingNewToken);
-    file.addEventListener("change", () => controller.run(() => controller.chooseFile(file.files[0])));
-    root.append(label("Add image", file));
+    root.append(imageUpload(controller));
     if (controller.newImage?.filename) root.append(element("p", "ic-help", controller.newImage.filename));
     if (controller.newImage?.filename && !controller.files.has(controller.newImage.token)) {
       root.append(element("p", "ic-help", "Select the local file again after restoring a workflow."));
@@ -225,7 +275,10 @@ export function renderCatalog(controller, root = controller.root) {
   }
   root.append(record);
   if (!state.adding && entry) {
-    root.append(checkbox("Hide", Boolean(hidden), (value) => { controller.editEntry(entry).hidden = value; controller.touch(); controller.render(); }));
+    const hiddenToggle = checkbox("Hidden", Boolean(hidden), (value) => { controller.editEntry(entry).hidden = value; controller.touch(); controller.render(); });
+    hiddenToggle.className = "ic-hidden-toggle";
+    hiddenToggle.prepend(hiddenToggle.querySelector("input"));
+    root.append(hiddenToggle);
   }
   const deleteActions = element("div", "ic-actions ic-delete-actions");
   const remove = button("Delete", () => controller.deleteImage());

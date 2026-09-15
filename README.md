@@ -80,15 +80,15 @@ For animated images, only the first frame is stored. EXIF orientation is applied
 The editor has two bordered blocks. The upper block contains **Catalog**, with
 **Refresh** to its right, and the catalog actions. Creation and field-editing forms
 open inside this block. The lower image block appears only when a catalog is
-selected. It contains the image selector, preview, properties, and **Hide**.
+selected. It contains the image selector, preview, properties, and **Hidden**.
 
 Each node owns a local catalog snapshot stored in the workflow. All property,
 visibility, field, and image-list changes affect workflow outputs immediately,
 without writing the server JSON. Switching images retains all pending changes.
 
-**Hide** makes the preview and fields translucent and read-only. Hidden records
+The left-aligned **Hidden** checkbox precedes its label and makes the preview and fields translucent and read-only. Hidden records
 are skipped by index selection but remain in the dropdown for restoration.
-Clear **Hide** to include the record again.
+Clear **Hidden** to include the record again.
 
 The red **Delete** button on the right asks for confirmation and removes the
 displayed image from the local catalog. The server record and image file remain
@@ -97,6 +97,9 @@ until **Save Changes**. Deleting a new draft removes only that draft.
 Below the divider, **Add Image** and **Save Changes** are aligned to the left.
 **Add Image** starts another draft; the image dropdown lets you switch between
 drafts and stored records. Blank drafts without files are ignored.
+The file picker sits inside a dashed drop area with 20 px padding. Drag one image
+into this area, or use the file picker. The area highlights while dragging; a drop
+updates the current draft without importing a workflow or saving to the server.
 **Save Changes** asks to save **all changes for all images and fields**, stages
 new files, and commits the complete catalog through the API. It also permanently
 removes files for deleted records. No workflow run is necessary.

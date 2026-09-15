@@ -70,6 +70,42 @@ async def main():
                     assert await page.locator(".ic-delete-actions").evaluate("row => getComputedStyle(row).justifyContent") == "flex-end"
                     png = BytesIO()
                     Image.new("RGB", (320, 200), (55, 110, 190)).save(png, format="PNG")
+                    zone = page.locator(".ic-image-upload")
+                    await expect(zone.get_by_text("Drop an image here, or choose a file above.", exact=True)).to_be_visible()
+                    assert await zone.evaluate("zone => getComputedStyle(zone).padding") == "20px"
+                    await page.evaluate("window.canvasDrops = 0; document.addEventListener('drop', () => window.canvasDrops++)")
+                    transfer = await page.evaluate_handle("""bytes => {
+                        const transfer = new DataTransfer();
+                        transfer.items.add(new File([new Uint8Array(bytes)], 'dropped.png', { type: 'image/png' }));
+                        return transfer;
+                    }""", list(png.getvalue()))
+                    await zone.dispatch_event("dragenter", {"dataTransfer": transfer})
+                    await expect(page.locator(".ic-image-upload.is-dragging")).to_have_count(1)
+                    await zone.locator("input").dispatch_event("dragenter", {"dataTransfer": transfer})
+                    await zone.locator("input").dispatch_event("dragleave", {"dataTransfer": transfer})
+                    await expect(page.locator(".ic-image-upload.is-dragging")).to_have_count(1)
+                    await zone.dispatch_event("dragleave", {"dataTransfer": transfer})
+                    await expect(page.locator(".ic-image-upload.is-dragging")).to_have_count(0)
+                    await zone.dispatch_event("dragover", {"dataTransfer": transfer})
+                    await zone.locator("input").dispatch_event("drop", {"dataTransfer": transfer})
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (1/1)")
+                    await expect(page.locator("img.ic-preview")).to_have_attribute("alt", "dropped.png")
+                    await expect(page.locator(".ic-image-upload.is-dragging")).to_have_count(0)
+                    assert await page.evaluate("window.canvasDrops") == 0
+                    invalid = await page.evaluate_handle("""() => {
+                        const transfer = new DataTransfer();
+                        transfer.items.add(new File(['not an image'], 'notes.txt', { type: 'text/plain' }));
+                        return transfer;
+                    }""")
+                    await zone.dispatch_event("drop", {"dataTransfer": invalid})
+                    await expect(page.locator(".ic-status")).to_have_text("Please select an image file.")
+                    await expect(page.locator("img.ic-preview")).to_have_attribute("alt", "dropped.png")
+                    await transfer.evaluate("transfer => transfer.items.add(new File(['extra'], 'extra.png', { type: 'image/png' }))")
+                    await zone.dispatch_event("drop", {"dataTransfer": transfer})
+                    await expect(page.locator(".ic-status")).to_contain_text("Drop one image at a time")
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (1/1)")
+                    await transfer.dispose()
+                    await invalid.dispose()
                     async def add_file(name, caption, seed):
                         await page.get_by_label("Add image", exact=True).set_input_files({"name": name, "mimeType": "image/png", "buffer": png.getvalue()})
                         await page.get_by_label("caption", exact=True).fill(caption)
@@ -134,7 +170,11 @@ async def main():
                     await page.wait_for_function("window.lastOutputs[1] === 'Workflow-only caption'")
                     assert backend.STORE.get(catalog_id)["entries"][0]["values"]["caption"] == "First line\nSecond line"
                     await page.get_by_label("Image", exact=True).select_option(entries[0]["id"])
-                    await page.get_by_label("Hide", exact=True).check()
+                    hidden_toggle = page.locator(".ic-hidden-toggle")
+                    assert await hidden_toggle.evaluate("label => Array.from(label.children, child => child.tagName)") == ["INPUT", "SPAN"]
+                    assert await hidden_toggle.evaluate("label => getComputedStyle(label).justifyContent") == "flex-start"
+                    await hidden_toggle.get_by_text("Hidden", exact=True).click()
+                    await expect(page.locator(".ic-image-block").get_by_label("Hidden", exact=True)).to_be_checked()
                     await expect(page.get_by_label("caption", exact=True)).to_be_disabled()
                     await page.get_by_label("image_index", exact=True).fill("0")
                     await page.get_by_role("button", name="Queue workflow", exact=True).click()
