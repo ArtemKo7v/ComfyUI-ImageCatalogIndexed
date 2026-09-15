@@ -42,6 +42,14 @@ The image dropdown and preview select a record from the active catalog. Choosing
 a visible record updates `image_index`. This is the only input that can be
 connected to another node; images and property editors are not input sockets.
 
+The selector heading shows **Image (N/NN)**: the displayed image's one-based
+position and the total number of local catalog images, including hidden records
+and drafts with selected files. Empty drafts are not counted and show position
+zero. The counter updates when selecting, adding, deleting, or reloading images.
+Arrow buttons on either side of the preview navigate this list without wrapping.
+They are vertically centered; the previous arrow is absent on the first image,
+the next arrow on the last, and both are absent for a single image.
+
 The catalog editor expands with the node and fills the remaining height. It has
 a minimum height of 420 px and scrolls internally when its contents do not fit.
 

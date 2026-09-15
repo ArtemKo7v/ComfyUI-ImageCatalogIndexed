@@ -63,6 +63,7 @@ async def main():
                         await page.locator(".ic-row select").nth(index).select_option(kind)
                     await page.get_by_role("button", name="Create Now", exact=True).click()
                     await expect(page.locator(".ic-image-block")).to_be_visible()
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (0/0)")
                     await expect(page.get_by_role("button", name="Import Catalog", exact=True)).to_have_count(0)
                     assert await page.locator(".ic-catalog-actions button").all_text_contents() == ["Edit Catalog", "Export Catalog", "Reload Catalog", "Delete Catalog"]
                     assert await page.locator(".ic-image-actions").evaluate("actions => actions.previousElementSibling.tagName") == "HR"
@@ -74,6 +75,9 @@ async def main():
                         await page.get_by_label("caption", exact=True).fill(caption)
                         await page.get_by_label("seed", exact=True).fill(str(seed))
                     await add_file("first.png", "First line\nSecond line", 123)
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (1/1)")
+                    await expect(page.get_by_role("button", name="Previous image", exact=True)).to_have_count(0)
+                    await expect(page.get_by_role("button", name="Next image", exact=True)).to_have_count(0)
                     await page.get_by_label("enabled", exact=True).check()
                     await page.get_by_role("button", name="Queue workflow", exact=True).click()
                     await page.wait_for_function("window.lastOutputs?.[1] === 'First line\\nSecond line'")
@@ -84,10 +88,19 @@ async def main():
                     assert backend.STORE.get(catalog_id)["entries"] == []
                     await page.get_by_role("button", name="Add Image", exact=True).click()
                     await add_file("second.png", "Second image", 222)
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (2/2)")
+                    await expect(page.get_by_role("button", name="Next image", exact=True)).to_have_count(0)
+                    await page.get_by_role("button", name="Previous image", exact=True).click()
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (1/2)")
+                    await expect(page.get_by_label("caption", exact=True)).to_have_value("First line\nSecond line")
+                    await expect(page.get_by_role("button", name="Previous image", exact=True)).to_have_count(0)
+                    await page.get_by_role("button", name="Next image", exact=True).click()
+                    await expect(page.get_by_label("caption", exact=True)).to_have_value("Second image")
                     await page.get_by_role("button", name="Add Image", exact=True).click()
                     await add_file("discard.png", "Discard", 0)
                     await page.get_by_role("button", name="Delete", exact=True).click()
                     assert await page.evaluate("window.catalogNode.imageCatalog.state.newImages.length") == 2
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (1/2)")
                     await page.get_by_role("button", name="Add Image", exact=True).click()
                     await add_file("third.png", "Third image", 333)
                     await page.get_by_label("Index after queue", exact=True).select_option("increment")
@@ -98,6 +111,18 @@ async def main():
                     await page.get_by_role("button", name="Save Changes", exact=True).click()
                     await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
                     entries = backend.STORE.get(catalog_id)["entries"]
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (3/3)")
+                    await page.get_by_role("button", name="Previous image", exact=True).click()
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (2/3)")
+                    for name in ("Previous image", "Next image"):
+                        arrow = page.get_by_role("button", name=name, exact=True)
+                        await expect(arrow).to_be_visible()
+                        bounds = await arrow.bounding_box()
+                        preview = await page.locator("img.ic-preview").bounding_box()
+                        assert abs(bounds["y"] + bounds["height"] / 2 - preview["y"] - preview["height"] / 2) < 1
+                    assert await page.evaluate("window.catalogNode.widgets[0].value") == 1
+                    await page.get_by_role("button", name="Next image", exact=True).click()
+                    await expect(page.get_by_role("button", name="Next image", exact=True)).to_have_count(0)
                     assert [entry["values"]["seed"] for entry in entries] == [123, 222, 333]
                     assert await page.evaluate("window.catalogNode.imageCatalog.state.newImages.length") == 0
                     await page.get_by_label("Image", exact=True).select_option(entries[0]["id"])
@@ -120,6 +145,7 @@ async def main():
                     assert (path.parent / entries[1]["file"]).exists()
                     assert len(backend.STORE.get(catalog_id)["entries"]) == 3
                     assert await page.evaluate("window.catalogNode.imageCatalog.workingCatalog().entries.length") == 2
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (2/2)")
                     await page.get_by_role("button", name="Export Catalog", exact=True).click()
                     await expect(page.get_by_role("dialog")).to_be_visible()
                     await page.get_by_role("dialog").get_by_role("button", name="Cancel", exact=True).click()
@@ -142,6 +168,8 @@ async def main():
                     assert not (path.parent / entries[1]["file"]).exists()
                     assert backend.STORE.get(catalog_id)["entries"][0]["hidden"]
                     assert not await page.evaluate("window.catalogNode.imageCatalog.hasUnsavedChanges()")
+                    await page.get_by_role("button", name="Reload Catalog", exact=True).click()
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (2/2)")
                     await page.evaluate("window.catalogNode.outputs[3].links = [77]")
                     await page.get_by_role("button", name="Edit Catalog", exact=True).click()
                     await expect(page.locator(".ic-image-block")).to_be_visible()

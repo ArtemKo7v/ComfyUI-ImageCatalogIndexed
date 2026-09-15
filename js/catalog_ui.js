@@ -68,6 +68,11 @@ export function installStyles() {
     .image-catalog .ic-row > input { flex: 1; }
     .image-catalog .ic-row > select { width: 100px; flex: 0 0 100px; }
     .image-catalog .ic-preview { display: block; width: 100%; height: 190px; object-fit: contain; background: #181818; margin: 8px 0; }
+    .image-catalog .ic-preview-navigation { display: grid; grid-template-columns: 30px minmax(0, 1fr) 30px; align-items: center; gap: 6px; }
+    .image-catalog .ic-preview-navigation > .ic-preview { grid-column: 2; grid-row: 1; }
+    .image-catalog .ic-preview-navigation > button { grid-row: 1; padding: 6px 0; font-size: 20px; line-height: 1; }
+    .image-catalog .ic-previous-image { grid-column: 1; }
+    .image-catalog .ic-next-image { grid-column: 3; }
     .image-catalog .ic-record { padding: 6px; border-radius: 5px; }
     .image-catalog .ic-record.is-hidden { opacity: .45; }
     .image-catalog .ic-record.is-deleted { background: #702626; opacity: .5; }
@@ -135,13 +140,21 @@ export function renderCatalog(controller, root = controller.root) {
   const catalog = controller.workingCatalog();
   const storedEntries = catalog.entries.filter((entry) => !state.newImages.some((draft) => draft.token === entry.id));
   const entry = catalog.entries.find((item) => item.id === state.selectedId);
+  const selectedId = state.adding ? state.draftToken : state.selectedId;
+  const selectedIndex = catalog.entries.findIndex((item) => item.id === selectedId);
+  const imageTitle = `Image (${selectedIndex + 1}/${catalog.entries.length})`;
+  const selectImage = (id) => state.newImages.some((draft) => draft.token === id)
+    ? controller.selectDraft(id) : controller.selectEntry(id);
   if (catalog.entries.length || state.newImages.length) {
     const options = storedEntries.map((item) => [item.id, `${item.filename}${item.hidden ? " (hidden)" : ""} [${item.id.slice(0, 6)}]`]);
     options.push(...state.newImages.map((image, index) => [`new:${image.token}`, `New ${index + 1}: ${image.filename || "Select a file"}`]));
     const imageSelect = select(options, state.adding ? `new:${state.draftToken}` : state.selectedId,
       (id) => id.startsWith("new:") ? controller.selectDraft(id.slice(4)) : controller.selectEntry(id));
-    root.append(label("Image", imageSelect));
-  }
+    const field = label("Image", imageSelect);
+    field.classList.add("ic-image-selector");
+    field.firstElementChild.textContent = imageTitle;
+    root.append(field);
+  } else root.append(element("p", "ic-image-selector", imageTitle));
   if (state.newImages.some((image) => image.filename)) {
     root.append(element("p", "ic-help", `${state.newImages.filter((image) => image.filename).length} new image(s). Workflow execution uses local changes; Save Changes persists them.`));
   }
@@ -165,12 +178,27 @@ export function renderCatalog(controller, root = controller.root) {
   const deleted = !state.adding && edit?.delete;
   const record = element("div", "ic-record" + (deleted ? " is-deleted" : hidden ? " is-hidden" : ""));
   const source = state.adding ? controller.previewUrl : entry ? controller.imageUrl(entry.id) : null;
-  if (source) {
-    const preview = element("img", "ic-preview");
-    preview.src = source;
-    preview.alt = state.adding ? controller.newImage.filename : entry.filename;
-    preview.addEventListener("error", () => controller.status("Image preview is unavailable.", true));
-    record.append(preview);
+  if (source || selectedIndex >= 0) {
+    const preview = element(source ? "img" : "div", "ic-preview");
+    if (source) {
+      preview.src = source;
+      preview.alt = state.adding ? controller.newImage.filename : entry.filename;
+      preview.addEventListener("error", () => controller.status("Image preview is unavailable.", true));
+    } else preview.textContent = "Image preview is unavailable.";
+    const navigation = element("div", catalog.entries.length > 1 ? "ic-preview-navigation" : "");
+    navigation.append(preview);
+    for (const [offset, text, title, className] of [
+      [-1, "\u2190", "Previous image", "ic-previous-image"], [1, "\u2192", "Next image", "ic-next-image"],
+    ]) {
+      const target = selectedIndex >= 0 ? catalog.entries[selectedIndex + offset] : null;
+      if (!target) continue;
+      const arrow = button(text, () => selectImage(target.id));
+      arrow.className = className;
+      arrow.setAttribute("aria-label", title);
+      arrow.title = title;
+      navigation.append(arrow);
+    }
+    record.append(navigation);
   }
   const values = state.adding ? controller.newImage?.values : edit?.values || entry?.values;
   if (values) {
