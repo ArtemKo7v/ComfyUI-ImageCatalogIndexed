@@ -47,7 +47,7 @@ export function checkbox(text, value, onChange) {
 }
 
 /** Keep native file selection and file drops on the same draft upload path. */
-function imageUpload(controller) {
+function imageUpload(controller, title = "Add image") {
   const zone = element("div", "ic-image-upload");
   zone.setAttribute("role", "group");
   zone.setAttribute("aria-label", "Image upload");
@@ -71,7 +71,7 @@ function imageUpload(controller) {
     controller.run(() => controller.chooseFile(image));
   };
   file.addEventListener("change", () => choose(file.files));
-  zone.append(label("Add image", file), element("p", "ic-help", "Drop an image here, or choose a file above."));
+  zone.append(label(title, file), element("p", "ic-help", "Drop an image here, or choose a file above."));
   let dragDepth = 0;
   for (const type of ["dragenter", "dragover", "dragleave", "drop"]) {
     zone.addEventListener(type, (event) => {
@@ -226,9 +226,12 @@ export function renderCatalog(controller, root = controller.root) {
   const edit = entry ? state.edits[entry.id] : null;
   const hidden = !state.adding && (edit?.hidden ?? entry?.hidden);
   const deleted = !state.adding && edit?.delete;
+  const replacing = !state.adding && entry && controller.replacingId === entry.id;
   const record = element("div", "ic-record" + (deleted ? " is-deleted" : hidden ? " is-hidden" : ""));
   const source = state.adding ? controller.previewUrl : entry ? controller.imageUrl(entry.id) : null;
-  if (source || selectedIndex >= 0) {
+  if (replacing) {
+    record.append(imageUpload(controller, "Replacement image"), button("Cancel Replacement", () => controller.cancelReplacing()));
+  } else if (source || selectedIndex >= 0) {
     const preview = element(source ? "img" : "div", "ic-preview");
     if (source) {
       preview.src = source;
@@ -249,6 +252,14 @@ export function renderCatalog(controller, root = controller.root) {
       navigation.append(arrow);
     }
     record.append(navigation);
+  }
+  if (!state.adding && entry && !replacing) {
+    const replace = button("Replace Image", () => controller.startReplacing());
+    replace.disabled = Boolean(hidden || deleted);
+    record.append(replace);
+    if (edit?.replacement && !controller.files.has(edit.replacement.token)) {
+      record.append(element("p", "ic-help", "Select the replacement file again after restoring a workflow."));
+    }
   }
   const values = state.adding ? controller.newImage?.values : edit?.values || entry?.values;
   if (values) {

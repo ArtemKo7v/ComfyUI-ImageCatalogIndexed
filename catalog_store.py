@@ -106,12 +106,17 @@ def validate_catalog(data, catalog_id=None):
         if type(revision) is not int or revision < 0:
             raise CatalogError("Invalid schema revision.")
         # Imported and on-disk records share these integrity checks.
-        seen = set()
+        seen, files = set(), set()
         for entry in data["entries"]:
             validate_id(entry["id"])
-            if entry["id"] in seen or entry["file"] != entry["id"] + ".png":
+            filename = entry["file"]
+            if not isinstance(filename, str) or not filename.endswith(".png"):
+                raise CatalogError("Invalid image file.")
+            validate_id(filename[:-4])
+            if entry["id"] in seen or filename in files:
                 raise CatalogError("Invalid image record.")
             seen.add(entry["id"])
+            files.add(filename)
             if not isinstance(entry["filename"], str) or not 1 <= len(entry["filename"]) <= 255:
                 raise CatalogError("Invalid image filename.")
             entry["values"] = validate_values(data["schema"], entry["values"])
@@ -288,7 +293,7 @@ class CatalogStore:
         validate_id(token)
         filename = str(filename).replace("\\", "/").rsplit("/", 1)[-1][:255] or "image.png"
         with self.lock:
-            if any(entry["id"] == token for entry in self._read(catalog_id)["entries"]):
+            if any(entry["file"] == token + ".png" for entry in self._read(catalog_id)["entries"]):
                 return
             staging = self._staging(catalog_id)
             # Staging survives queueing but abandoned uploads expire.
@@ -321,9 +326,10 @@ class CatalogStore:
         directory = self._directory(original["id"])
         staging = self._child(self.root, ".staging")
         for entry in client["entries"]:
-            token = entry["id"]
-            if token in existing:
-                sources[token] = self._child(directory, existing[token]["file"])
+            entry_id = entry["id"]
+            token = entry["file"][:-4]
+            if entry_id in existing and entry["file"] == existing[entry_id]["file"]:
+                sources[entry_id] = self._child(directory, entry["file"])
             else:
                 try:
                     metadata = json.loads(self._child(staging, token + ".json").read_text(encoding="utf-8"))
@@ -331,8 +337,8 @@ class CatalogStore:
                     raise CatalogError("Image is missing or its upload expired. Select the file again.") from error
                 if metadata.get("catalog_id") != original["id"]:
                     raise CatalogError("Upload belongs to another catalog.")
-                sources[token] = staged[token] = self._child(staging, token + ".png")
-            if not sources[token].is_file():
+                sources[entry_id] = staged[token] = self._child(staging, token + ".png")
+            if not sources[entry_id].is_file():
                 raise CatalogError("Catalog image file is missing.")
         return sources, staged
 
@@ -372,7 +378,7 @@ class CatalogStore:
             previous = {entry["id"]: entry for entry in original["entries"]}
             for entry in client["entries"]:
                 old = previous.get(entry["id"])
-                changed = old and any(old[key] != entry[key] for key in ("values", "hidden", "filename"))
+                changed = old and any(old[key] != entry[key] for key in ("values", "hidden", "filename", "file"))
                 entry["revision"] = old["revision"] + int(bool(changed)) if old else 1
             client["revision"] = original["revision"] + 1
             client["schema_revision"] = original["schema_revision"] + int(client["schema"] != original["schema"])
@@ -392,8 +398,8 @@ class CatalogStore:
                 for destination in destinations:
                     destination.unlink(missing_ok=True)
                 raise
-            retained = {entry["id"] for entry in client["entries"]}
-            cleanup = [self._child(directory, entry["file"]) for entry in original["entries"] if entry["id"] not in retained]
+            retained = {entry["file"] for entry in client["entries"]}
+            cleanup = [self._child(directory, entry["file"]) for entry in original["entries"] if entry["file"] not in retained]
             for path in staged.values():
                 cleanup.extend((path, path.with_suffix(".json")))
             warnings = []

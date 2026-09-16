@@ -94,6 +94,16 @@ The red **Delete** button on the right asks for confirmation and removes the
 displayed image from the local catalog. The server record and image file remain
 until **Save Changes**. Deleting a new draft removes only that draft.
 
+**Replace Image** below an existing image's preview opens the file picker and
+drag-and-drop area in place of the preview. **Cancel Replacement** closes the
+picker without changing the image. Choosing a file replaces only the image and
+its display filename: the record ID, position, properties, and catalog count stay
+the same. Workflow execution uses the replacement immediately, while the saved
+image remains unchanged until **Save Changes**. Saving publishes the replacement
+atomically before removing the old file. A failed save keeps the original intact.
+Unhide a hidden record before replacing its image. As with new drafts, unsaved
+replacement files must be selected again after restoring a workflow.
+
 Below the divider, **Add Image** and **Save Changes** are aligned to the left.
 **Add Image** starts another draft; the image dropdown lets you switch between
 drafts and stored records. Blank drafts without files are ignored.

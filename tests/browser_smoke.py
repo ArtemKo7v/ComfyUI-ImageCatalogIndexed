@@ -161,6 +161,50 @@ async def main():
                     await expect(page.get_by_role("button", name="Next image", exact=True)).to_have_count(0)
                     assert [entry["values"]["seed"] for entry in entries] == [123, 222, 333]
                     assert await page.evaluate("window.catalogNode.imageCatalog.state.newImages.length") == 0
+                    before_replacement = path.read_bytes()
+                    await page.get_by_role("button", name="Replace Image", exact=True).click()
+                    await expect(page.get_by_label("Replacement image", exact=True)).to_be_visible()
+                    await expect(page.locator("img.ic-preview")).to_have_count(0)
+                    await expect(page.get_by_label("caption", exact=True)).to_have_value("Third image")
+                    await page.get_by_role("button", name="Cancel Replacement", exact=True).click()
+                    await expect(page.locator("img.ic-preview")).to_have_attribute("alt", "third.png")
+                    assert not await page.evaluate("window.catalogNode.imageCatalog.hasUnsavedChanges()")
+                    replacement_png = BytesIO()
+                    Image.new("RGB", (64, 48), "green").save(replacement_png, format="PNG")
+                    replacement = await page.evaluate_handle("""bytes => {
+                        const transfer = new DataTransfer();
+                        transfer.items.add(new File([new Uint8Array(bytes)], 'replacement.png', { type: 'image/png' }));
+                        return transfer;
+                    }""", list(replacement_png.getvalue()))
+                    await page.get_by_role("button", name="Replace Image", exact=True).click()
+                    await page.locator(".ic-image-upload").dispatch_event("drop", {"dataTransfer": replacement})
+                    await replacement.dispose()
+                    await expect(page.locator("img.ic-preview")).to_have_attribute("alt", "replacement.png")
+                    await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (3/3)")
+                    await expect(page.get_by_label("seed", exact=True)).to_have_value("333")
+                    await page.get_by_role("button", name="Previous image", exact=True).click()
+                    await page.get_by_role("button", name="Next image", exact=True).click()
+                    await page.wait_for_function("document.querySelector('img.ic-preview').naturalWidth === 64")
+                    await page.get_by_label("Index after queue", exact=True).select_option("fixed")
+                    await page.get_by_role("button", name="Queue workflow", exact=True).click()
+                    await page.wait_for_function("window.lastOutputs[0][2] === 64")
+                    assert await page.evaluate("window.lastOutputs.slice(0, 4)") == [[1, 48, 64, 3], "Third image", 333, False]
+                    assert path.read_bytes() == before_replacement
+                    assert (path.parent / entries[2]["file"]).exists()
+                    await page.get_by_role("button", name="Restore workflow", exact=True).click()
+                    await expect(page.get_by_text("Select the replacement file again after restoring a workflow.", exact=True)).to_be_visible()
+                    await page.get_by_role("button", name="Replace Image", exact=True).click()
+                    await page.get_by_label("Replacement image", exact=True).set_input_files({
+                        "name": "replacement.png", "mimeType": "image/png", "buffer": replacement_png.getvalue()})
+                    await page.get_by_role("button", name="Save Changes", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
+                    replaced = backend.STORE.get(catalog_id)["entries"][2]
+                    assert replaced["id"] == entries[2]["id"]
+                    assert replaced["values"] == entries[2]["values"]
+                    assert replaced["file"] != entries[2]["file"]
+                    assert not (path.parent / entries[2]["file"]).exists()
+                    await page.wait_for_function("document.querySelector('img.ic-preview').naturalWidth === 64")
+                    await page.get_by_label("Index after queue", exact=True).select_option("increment")
                     await page.get_by_label("Image", exact=True).select_option(entries[0]["id"])
                     await page.get_by_label("caption", exact=True).fill("Workflow-only caption")
                     await page.get_by_role("button", name="Restore workflow", exact=True).click()

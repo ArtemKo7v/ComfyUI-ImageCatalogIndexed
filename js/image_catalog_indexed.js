@@ -107,6 +107,7 @@ export class CatalogController {
       client_catalog: this.workingCatalog(), operation_id: this.state.operationId, instance_id: this.id,
       index_connected: this.connected, index_mode: this.state.indexMode,
       new_images: this.state.newImages.filter((image) => image.filename),
+      replacement_images: Object.values(this.state.edits).filter((edit) => !edit.delete && edit.replacement).map((edit) => edit.replacement),
       new_selection: this.state.adding && this.state.newSelection ? this.newImage?.token : null };
   }
 
@@ -162,7 +163,34 @@ export class CatalogController {
 
 /** Build a preview URL for a stored catalog image. */
   imageUrl(entryId) {
-    return api.apiURL(`${PREFIX}/catalogs/${this.state.catalogId}/images/${entryId}`);
+    const replacement = this.state.edits[entryId]?.replacement;
+    if (replacement) return this.localPreview(replacement.token);
+    const entry = this.catalog?.entries.find((image) => image.id === entryId);
+    return api.apiURL(`${PREFIX}/catalogs/${this.state.catalogId}/images/${entryId}?v=${entry?.file || ""}`);
+  }
+
+/** Reuse one object URL for the displayed local replacement. */
+  localPreview(token) {
+    if (this.previewToken === token) return this.previewUrl;
+    this.releasePreview();
+    const file = this.files.get(token);
+    if (file) {
+      this.previewToken = token;
+      this.previewUrl = URL.createObjectURL(file);
+    }
+    return this.previewUrl;
+  }
+
+/** Open the existing record's file picker without changing its values or file. */
+  startReplacing() {
+    this.replacingId = this.state.selectedId;
+    this.render();
+  }
+
+/** Leave the replacement picker with the previously selected image intact. */
+  cancelReplacing() {
+    this.replacingId = null;
+    this.render();
   }
 
 /** Reload catalog summaries for the selector. */
@@ -175,6 +203,7 @@ export class CatalogController {
 
 /** Load a catalog and reconcile local editor state. */
   async loadCatalog(catalogId, preserve = false) {
+    this.replacingId = null;
     const sequence = ++this.loadSequence;
     if (!catalogId) {
       this.releasePreview();
@@ -364,6 +393,7 @@ export class CatalogController {
 
 /** Select the record at the visible image index. */
   selectIndex(render = true) {
+    this.replacingId = null;
     const catalog = this.workingCatalog();
     const entries = catalog?.entries.filter((entry) => !entry.hidden) || [];
     const index = wrapIndex(Number(this.indexWidget.value) || 0, entries.length);
@@ -382,6 +412,7 @@ export class CatalogController {
 
 /** Select an existing catalog entry. */
   selectEntry(id) {
+    this.replacingId = null;
     this.releasePreview();
     this.state.adding = false;
     this.state.selectedId = id;
@@ -393,6 +424,7 @@ export class CatalogController {
 
 /** Open or create an image draft. */
   startAdding(render = true) {
+    this.replacingId = null;
     if (this.pendingNewToken) return;
     this.releasePreview();
     this.state.adding = true;
@@ -407,6 +439,7 @@ export class CatalogController {
 
 /** Select an unsaved image draft. */
   selectDraft(token) {
+    this.replacingId = null;
     this.state.draftToken = token;
     this.state.adding = true;
     this.state.newSelection = true;
@@ -446,12 +479,30 @@ export class CatalogController {
   releasePreview() {
     if (this.previewUrl) URL.revokeObjectURL(this.previewUrl);
     this.previewUrl = null;
+    this.previewToken = null;
   }
 
-/** Attach a local file to the active draft. */
+/** Attach a local file to a new draft or replace an existing record's image. */
   async chooseFile(file) {
     if (!file) return;
     if (file.size > 64 * 1024 * 1024) throw new Error("Image uploads cannot exceed 64 MiB.");
+    if (!this.state.adding) {
+      const entry = this.catalog.entries.find((image) => image.id === this.replacingId);
+      if (!entry || this.replacingId !== this.state.selectedId) return;
+      const edit = this.editEntry(entry);
+      if (edit.hidden || edit.delete) return;
+      if (edit.replacement) {
+        this.files.delete(edit.replacement.token);
+        this.uploads.delete(edit.replacement.token);
+      }
+      const token = identifier();
+      this.files.set(token, file);
+      edit.replacement = { token, filename: file.name };
+      this.replacingId = null;
+      this.touch();
+      this.render();
+      return;
+    }
     this.releasePreview();
     const token = identifier();
     this.files.set(token, file);
@@ -541,12 +592,13 @@ export class CatalogController {
         }
       }
     }
-    for (const image of state.new_images) {
+    const pendingImages = [...state.new_images, ...(state.replacement_images || [])];
+    for (const image of pendingImages) {
       const { token } = image;
       const file = this.files.get(token);
       if (!file) throw new Error(`Select '${image.filename}' again before running or saving. Local files cannot be restored from workflow JSON.`);
     }
-    for (const { token } of state.new_images) {
+    for (const { token } of pendingImages) {
       const file = this.files.get(token);
       if (!this.uploads.has(token)) {
         const body = new FormData();

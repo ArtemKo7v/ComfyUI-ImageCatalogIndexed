@@ -40,3 +40,16 @@ test("schema migration preserves hidden values and defaults only added propertie
   assert.deepEqual(migrateValues(schema, { caption: "Keep this", deleted: 12 }), { caption: "Keep this", enabled: false });
   assert.deepEqual(outputDefinitions(schema), [{ name: "IMAGE", type: "IMAGE" }, { name: "caption", type: "STRING" }, { name: "enabled", type: "BOOLEAN" }]);
 });
+
+test("replacing a file preserves entry identity, order, properties and visibility", () => {
+  const schema = [{ name: "caption", type: "Text" }];
+  const catalog = { schema, entries: [
+    { id: "first", file: "old.png", filename: "old.png", values: { caption: "Keep" }, hidden: true },
+    { id: "second", file: "second.png", filename: "second.png", values: { caption: "Second" }, hidden: false },
+  ] };
+  const original = structuredClone(catalog);
+  const client = buildClientCatalog(catalog, schema, { first: { replacement: { token: "new", filename: "replacement.jpg" } } }, []);
+  assert.deepEqual(client.entries.map((entry) => entry.id), ["first", "second"]);
+  assert.deepEqual(client.entries[0], { ...original.entries[0], file: "new.png", filename: "replacement.jpg" });
+  assert.deepEqual(catalog, original);
+});

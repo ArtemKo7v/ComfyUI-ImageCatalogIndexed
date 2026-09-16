@@ -108,3 +108,60 @@ class ClientCatalogTests(unittest.TestCase):
         entry["values"]["caption"] = 1
         with self.assertRaises(CatalogError):
             self.save(self.catalog)
+
+    def test_replacement_preserves_record_and_commits_only_on_save(self):
+        self.draft(self.catalog, "First")
+        self.draft(self.catalog, "Second")
+        local = self.save(self.catalog)
+        original = copy.deepcopy(local)
+        before = self.path.read_bytes()
+        entry = local["entries"][0]
+        token = uuid.uuid4().hex
+        self.store.stage(local["id"], token, b"replacement bytes", "replacement.png")
+        entry.update(file=token + ".png", filename="replacement.png")
+        result = self.execute(local)
+        self.assertEqual(result["image"], b"replacement bytes")
+        self.assertEqual(result["values"], ["First"])
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertEqual(self.execute(original)["image"], b"image")
+        operation = uuid.uuid4().hex
+        saved = self.save(local, operation)
+        self.assertEqual([item["id"] for item in saved["entries"]], [item["id"] for item in original["entries"]])
+        self.assertEqual(saved["entries"][0]["revision"], 2)
+        self.assertEqual(self.execute(saved)["image"], b"replacement bytes")
+        self.assertFalse((self.path.parent / original["entries"][0]["file"]).exists())
+        self.assertEqual(self.save(local, operation), saved)
+        with self.assertRaises(CatalogConflict):
+            self.save(original)
+
+    def test_failed_replacement_keeps_original_file_and_allows_retry(self):
+        self.draft(self.catalog, "First")
+        local = self.save(self.catalog)
+        old_file = local["entries"][0]["file"]
+        token = uuid.uuid4().hex
+        self.store.stage(local["id"], token, b"replacement", "replacement.png")
+        local["entries"][0]["file"] = token + ".png"
+        before = self.path.read_bytes()
+        with patch.object(self.store, "_write", side_effect=OSError("Disk full")):
+            with self.assertRaises(OSError):
+                self.save(local)
+        self.assertEqual(self.path.read_bytes(), before)
+        self.assertTrue((self.path.parent / old_file).exists())
+        self.assertFalse((self.path.parent / (token + ".png")).exists())
+        self.assertEqual(self.execute(local)["image"], b"replacement")
+        self.save(local)
+        self.assertFalse((self.path.parent / old_file).exists())
+
+    def test_replacement_rejects_missing_foreign_and_unsafe_files(self):
+        self.draft(self.catalog, "First")
+        saved = self.save(self.catalog)
+        other = self.store.create("Other", saved["schema"])
+        foreign = self.draft(other, "Foreign")
+        before = self.path.read_bytes()
+        for filename in ("../outside.png", foreign["file"], uuid.uuid4().hex + ".png"):
+            local = copy.deepcopy(saved)
+            local["entries"][0]["file"] = filename
+            for action in (self.execute, self.save):
+                with self.assertRaises(CatalogError):
+                    action(local)
+            self.assertEqual(self.path.read_bytes(), before)

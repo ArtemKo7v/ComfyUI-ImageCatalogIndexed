@@ -107,6 +107,33 @@ class RouteTests(unittest.IsolatedAsyncioTestCase):
         form.add_field("archive", content, filename="catalog.zip", content_type="application/zip")
         return await self.client.post(self.prefix + "/import", data=form)
 
+    async def test_replaced_image_preview_and_archive_roundtrip(self):
+        catalog, entry_id = await self.populate()
+        local = self.backend.STORE.get(catalog["id"])
+        token = uuid.uuid4().hex
+        png = BytesIO()
+        Image.new("RGB", (12, 9), "green").save(png, format="PNG")
+        form = FormData()
+        form.add_field("image", png.getvalue(), filename="replacement.png", content_type="image/png")
+        uploaded = await self.client.post(f"{self.prefix}/catalogs/{catalog['id']}/uploads/{token}", data=form)
+        self.assertEqual(uploaded.status, 200)
+        local["entries"][0].update(file=token + ".png", filename="replacement.png")
+        saved = await self.client.post(f"{self.prefix}/catalogs/{catalog['id']}/save", json={
+            "catalog": local, "expected_revision": local["revision"], "operation_id": uuid.uuid4().hex})
+        self.assertEqual(saved.status, 200, await saved.text())
+        preview = await self.client.get(f"{self.prefix}/catalogs/{catalog['id']}/images/{entry_id}")
+        self.assertEqual(Image.open(BytesIO(await preview.read())).size, (12, 9))
+        exported = await self.client.get(f"{self.prefix}/catalogs/{catalog['id']}/export")
+        content = await exported.read()
+        with zipfile.ZipFile(BytesIO(content)) as archive:
+            self.assertEqual(set(archive.namelist()), {"catalog.json", token + ".png"})
+        imported = await self.import_bytes(content)
+        self.assertEqual(imported.status, 201, await imported.text())
+        clone = await imported.json()
+        self.assertEqual(clone["entries"][0]["values"], {"caption": "Preserved text"})
+        with Image.open(self.backend.STORE.image_path(clone["id"], clone["entries"][0]["id"])) as image:
+            self.assertEqual(image.size, (12, 9))
+
     async def test_edit_schema_export_and_import_roundtrip(self):
         catalog, token = await self.populate()
         schema = [{"name": "caption", "type": "Text", "hidden": True}, {"name": "score", "type": "Integer"}]

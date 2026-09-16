@@ -34,7 +34,8 @@ export function buildClientCatalog(catalog, schema, edits, drafts) {
   if (!catalog) return null;
   const entries = catalog.entries.filter((entry) => !edits[entry.id]?.delete).map((entry) => {
     const edit = edits[entry.id];
-    return { ...entry, values: migrateValues(schema, edit?.values || entry.values), hidden: edit?.hidden ?? entry.hidden };
+    return { ...entry, values: migrateValues(schema, edit?.values || entry.values), hidden: edit?.hidden ?? entry.hidden,
+      ...(edit?.replacement ? { file: `${edit.replacement.token}.png`, filename: edit.replacement.filename } : {}) };
   });
   for (const draft of drafts.filter((image) => image.filename)) {
     if (catalog.entries.some((entry) => entry.id === draft.token)) continue;
