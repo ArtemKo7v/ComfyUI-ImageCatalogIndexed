@@ -162,6 +162,13 @@ async def main():
                     assert [entry["values"]["seed"] for entry in entries] == [123, 222, 333]
                     assert await page.evaluate("window.catalogNode.imageCatalog.state.newImages.length") == 0
                     before_replacement = path.read_bytes()
+                    replace_button = page.get_by_role("button", name="Replace Image", exact=True)
+                    assert await replace_button.evaluate("button => getComputedStyle(button).marginBottom") == "8px"
+                    assert await replace_button.evaluate("""button => {
+                        const bounds = button.getBoundingClientRect();
+                        const parent = button.parentElement.getBoundingClientRect();
+                        return Math.abs(bounds.x + bounds.width / 2 - parent.x - parent.width / 2) < 1;
+                    }""")
                     await page.get_by_role("button", name="Replace Image", exact=True).click()
                     await expect(page.get_by_label("Replacement image", exact=True)).to_be_visible()
                     await expect(page.locator("img.ic-preview")).to_have_count(0)

@@ -125,6 +125,7 @@ export function installStyles() {
     .image-catalog .ic-preview-navigation > button { grid-row: 1; padding: 6px 0; font-size: 20px; line-height: 1; }
     .image-catalog .ic-previous-image { grid-column: 1; }
     .image-catalog .ic-next-image { grid-column: 3; }
+    .image-catalog .ic-replace-image { display: block; margin: 0 auto 8px; }
     .image-catalog .ic-image-upload { padding: 20px; margin: 10px 0; border: 2px dashed var(--border-color, #666); border-radius: 6px; }
     .image-catalog .ic-image-upload.is-dragging, .image-catalog .ic-image-upload:focus-within { border-color: #85bfff; background: #293c49; }
     .image-catalog .ic-image-upload > .ic-help { margin-bottom: 0; }
@@ -255,6 +256,7 @@ export function renderCatalog(controller, root = controller.root) {
   }
   if (!state.adding && entry && !replacing) {
     const replace = button("Replace Image", () => controller.startReplacing());
+    replace.className = "ic-replace-image";
     replace.disabled = Boolean(hidden || deleted);
     record.append(replace);
     if (edit?.replacement && !controller.files.has(edit.replacement.token)) {
