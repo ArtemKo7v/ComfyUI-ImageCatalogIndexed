@@ -87,12 +87,25 @@ export class CatalogController {
     // Keep node properties and the hidden backend widget on the same snapshot.
     this.node.properties ||= {};
     this.state.catalogData = this.catalog;
-    this.node.properties.imageCatalog = structuredClone(this.state);
+    this.node.properties.imageCatalog = this.serializableState();
     this.stateWidget.value = JSON.stringify(this.snapshot());
     this.node.setDirtyCanvas(true, true);
   }
 
-/** Record a new local change with a fresh operation identifier. */
+/** Return workflow-safe state without browser-only or uncloneable values. */
+  serializableState() {
+    const { catalogData, ...state } = this.state;
+    const workflowState = JSON.parse(JSON.stringify(state));
+    try {
+      workflowState.catalogData = JSON.parse(JSON.stringify(catalogData));
+    } catch {
+      // The saved catalog is optional: the server can reload it by ID or name.
+      workflowState.catalogData = null;
+    }
+    return workflowState;
+  }
+
+  /** Record a new local change with a fresh operation identifier. */
   touch() {
     // A new ID prevents a retry of an older prompt from acknowledging newer work.
     this.state.operationId = identifier();
@@ -102,7 +115,14 @@ export class CatalogController {
 /** Create the serializable state submitted with a queued prompt. */
   snapshot() {
     // Empty draft rows are a UI aid; only filename-bearing drafts can execute.
-    return { catalog_id: this.state.catalogId, schema: this.state.schema, edits: this.state.edits,
+    const imageIndex = Number(this.indexWidget.value);
+    return {
+      catalog_id: this.state.catalogId,
+      catalog_name: this.state.catalogName,
+      selected_id: this.state.selectedId,
+      image_index: Number.isSafeInteger(imageIndex) && imageIndex >= 0 ? imageIndex : 0,
+      schema: this.state.schema,
+      edits: this.state.edits,
       schema_revision: this.catalog?.schema_revision ?? 0,
       client_catalog: this.workingCatalog(), operation_id: this.state.operationId, instance_id: this.id,
       index_connected: this.connected, index_mode: this.state.indexMode,
@@ -123,23 +143,64 @@ export class CatalogController {
     return content(this.workingCatalog()) !== content(this.catalog);
   }
 
-/** Restore the workflow's local catalog without replacing it with server data. */
+/** Read the serialized hidden widget when node properties are unavailable. */
+  workflowSnapshot() {
+    try {
+      const value = this.stateWidget.value;
+      const snapshot = typeof value === "string" ? JSON.parse(value) : value;
+      return snapshot && typeof snapshot === "object" ? snapshot : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Restore the workflow's local catalog without replacing it with server data. */
   async restore() {
-    // Accept the earlier single-draft workflow format before restoring local data.
+    // Node properties preserve complete local work. The hidden widget is a
+    // portable fallback for frontends that only restore widget values.
     const saved = this.node.properties?.imageCatalog;
-    if (saved) this.state = { ...this.freshState(), ...structuredClone(saved) };
+    const snapshot = this.workflowSnapshot();
+    if (saved) this.state = { ...this.freshState(), ...saved };
+    else if (snapshot?.catalog_id) {
+      this.state = {
+        ...this.freshState(),
+        catalogId: snapshot.catalog_id,
+        catalogName: snapshot.catalog_name || "",
+        schema: Array.isArray(snapshot.schema) ? snapshot.schema : [],
+        selectedId: snapshot.selected_id || "",
+        indexMode: snapshot.index_mode || this.state.indexMode,
+      };
+    }
     if (saved?.newImage && !saved.newImages) {
       this.state.newImages = [saved.newImage];
       this.state.draftToken = saved.newImage.token;
     }
     delete this.state.newImage;
     this.catalog = this.state.catalogData || null;
+    if (Number.isSafeInteger(snapshot?.image_index) && snapshot.image_index >= 0) {
+      this.indexWidget.value = snapshot.image_index;
+    }
     this.indexModeWidget.value = this.state.indexMode;
     this.syncOutputs();
     this.render();
     await this.refreshList();
-    if (this.state.catalogId && !this.catalog) await this.loadCatalog(this.state.catalogId, true);
-    else this.persist();
+
+    // Resolve by ID first, then by saved name for copied catalog storage. An
+    // unavailable catalog deliberately restores as an unselected node.
+    const selectedCatalog = this.catalogs.find((item) => item.id === this.state.catalogId)
+      || this.catalogs.find((item) => item.name.toLowerCase() === this.state.catalogName.toLowerCase());
+    if (!selectedCatalog) {
+      if (this.state.catalogId || this.state.catalogName) await this.loadCatalog("");
+      else this.persist();
+      return;
+    }
+    if (!this.catalog || selectedCatalog.id !== this.state.catalogId) {
+      await this.loadCatalog(selectedCatalog.id, true);
+      return;
+    }
+    this.state.catalogId = selectedCatalog.id;
+    this.state.catalogName = selectedCatalog.name;
+    this.persist();
   }
 
 /** Run a UI action and present any thrown error. */
@@ -714,7 +775,7 @@ app.registerExtension({
     nodeType.prototype.onSerialize = function (data) {
       onSerialize?.apply(this, arguments);
       data.properties ||= {};
-      data.properties.imageCatalog = structuredClone(this.imageCatalog.state);
+      data.properties.imageCatalog = this.imageCatalog.serializableState();
     };
     const onExecuted = nodeType.prototype.onExecuted;
     nodeType.prototype.onExecuted = function (message) {

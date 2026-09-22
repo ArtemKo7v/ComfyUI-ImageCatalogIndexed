@@ -63,12 +63,23 @@
         document.querySelector("#index").value = node.widgets[0].value;
       } catch (error) { node.imageCatalog.status(error.message, true); }
     };
-    document.querySelector("#restore").onclick = () => {
+    async function restoreWorkflow(includeProperties) {
       const old = window.catalogNode;
-      const data = {}; old.onSerialize(data); const index = old.widgets[0].value; old.onRemoved();
-      const node = new TestNode(); node.properties = data.properties; node.widgets[0].value = index;
-      window.catalogNode = node; node.onConfigure();
-    };
+      const data = {};
+      const catalogState = old.imageCatalog.stateWidget.serializeValue();
+      const index = old.widgets[0].value;
+      old.onSerialize(data);
+      old.onRemoved();
+
+      const node = new TestNode();
+      node.properties = includeProperties ? data.properties : {};
+      node.widgets[0].value = index;
+      node.imageCatalog.stateWidget.value = catalogState;
+      window.catalogNode = node;
+      await node.imageCatalog.restore();
+    }
+    document.querySelector("#restore").onclick = () => restoreWorkflow(true);
+    window.restoreHiddenStateOnly = () => restoreWorkflow(false);
   </script>
 </body>
 </html>

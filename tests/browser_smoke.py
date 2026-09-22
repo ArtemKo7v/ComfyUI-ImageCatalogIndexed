@@ -161,6 +161,22 @@ async def main():
                     await expect(page.get_by_role("button", name="Next image", exact=True)).to_have_count(0)
                     assert [entry["values"]["seed"] for entry in entries] == [123, 222, 333]
                     assert await page.evaluate("window.catalogNode.imageCatalog.state.newImages.length") == 0
+                    await page.get_by_label("image_index", exact=True).fill("2")
+                    await page.evaluate("window.restoreHiddenStateOnly()")
+                    await expect(page.get_by_label("Catalog", exact=True)).to_have_value(catalog_id)
+                    assert await page.evaluate("window.catalogNode.widgets[0].value") == 2
+                    assert await page.evaluate("""() => {
+                      const controller = window.catalogNode.imageCatalog;
+                      controller.catalog.uncloneable = window;
+                      try {
+                        const data = {};
+                        window.catalogNode.onSerialize(data);
+                        return data.properties.imageCatalog.catalogId === controller.state.catalogId
+                          && data.properties.imageCatalog.catalogData === null;
+                      } finally {
+                        delete controller.catalog.uncloneable;
+                      }
+                    }""")
                     before_replacement = path.read_bytes()
                     replace_button = page.get_by_role("button", name="Replace Image", exact=True)
                     assert await replace_button.evaluate("button => getComputedStyle(button).marginBottom") == "8px"
