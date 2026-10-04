@@ -56,7 +56,7 @@ async def main():
                     assert await page.evaluate("window.catalogNode.widgets.slice(0, 2).map(widget => widget.name)") == ["image_index", "index_after_queue"]
                     await expect(page.locator(".ic-image-block")).to_have_count(0)
                     await expect(page.locator(".ic-selector-row").get_by_role("button", name="Refresh", exact=True)).to_be_visible()
-                    await expect(page.get_by_role("button", name="Import Catalog", exact=True)).to_be_visible()
+                    await expect(page.get_by_role("button", name="Import", exact=True)).to_be_visible()
                     await page.get_by_placeholder("Catalog name").fill("Browser example")
                     for index, (name, kind) in enumerate([("caption", "Text"), ("seed", "Integer"), ("enabled", "Boolean")]):
                         await page.get_by_placeholder("Property name").nth(index).fill(name)
@@ -64,8 +64,8 @@ async def main():
                     await page.get_by_role("button", name="Create Now", exact=True).click()
                     await expect(page.locator(".ic-image-block")).to_be_visible()
                     await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (0/0)")
-                    await expect(page.get_by_role("button", name="Import Catalog", exact=True)).to_have_count(0)
-                    assert await page.locator(".ic-catalog-actions button").all_text_contents() == ["Edit Catalog", "Export Catalog", "Reload Catalog", "Delete Catalog"]
+                    await expect(page.get_by_role("button", name="Import", exact=True)).to_have_count(0)
+                    assert await page.locator(".ic-catalog-actions button").all_text_contents() == ["Edit", "Export", "Import Additions", "Reload", "Delete"]
                     assert await page.locator(".ic-image-actions").evaluate("actions => actions.previousElementSibling.tagName") == "HR"
                     assert await page.locator(".ic-delete-actions").evaluate("row => getComputedStyle(row).justifyContent") == "flex-end"
                     png = BytesIO()
@@ -134,7 +134,7 @@ async def main():
                     await expect(page.get_by_label("caption", exact=True)).to_have_value("Second image")
                     await page.get_by_role("button", name="Add Image", exact=True).click()
                     await add_file("discard.png", "Discard", 0)
-                    await page.get_by_role("button", name="Delete", exact=True).click()
+                    await page.locator(".ic-image-block").get_by_role("button", name="Delete", exact=True).click()
                     assert await page.evaluate("window.catalogNode.imageCatalog.state.newImages.length") == 2
                     await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (1/2)")
                     await page.get_by_role("button", name="Add Image", exact=True).click()
@@ -248,15 +248,15 @@ async def main():
                     await page.wait_for_function("window.lastOutputs[1] === 'Second image'")
                     assert not backend.STORE.get(catalog_id)["entries"][0]["hidden"]
                     await page.get_by_label("Image", exact=True).select_option(entries[1]["id"])
-                    await page.get_by_role("button", name="Delete", exact=True).click()
+                    await page.locator(".ic-image-block").get_by_role("button", name="Delete", exact=True).click()
                     assert (path.parent / entries[1]["file"]).exists()
                     assert len(backend.STORE.get(catalog_id)["entries"]) == 3
                     assert await page.evaluate("window.catalogNode.imageCatalog.workingCatalog().entries.length") == 2
                     await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (2/2)")
-                    await page.get_by_role("button", name="Export Catalog", exact=True).click()
+                    await page.get_by_role("button", name="Export", exact=True).click()
                     await expect(page.get_by_role("dialog")).to_be_visible()
                     await page.get_by_role("dialog").get_by_role("button", name="Cancel", exact=True).click()
-                    await page.get_by_role("button", name="Export Catalog", exact=True).click()
+                    await page.get_by_role("button", name="Export", exact=True).click()
                     async with page.expect_download() as downloaded:
                         await page.get_by_role("button", name="Export Saved Version", exact=True).click()
                     download = await downloaded.value
@@ -265,7 +265,7 @@ async def main():
                         assert archive.read("catalog.json") == path.read_bytes()
                         assert len(archive.namelist()) == 4
                     assert await page.evaluate("window.catalogNode.imageCatalog.hasUnsavedChanges()")
-                    await page.get_by_role("button", name="Export Catalog", exact=True).click()
+                    await page.get_by_role("button", name="Export", exact=True).click()
                     async with page.expect_download() as downloaded:
                         await page.get_by_role("button", name="Save and Export", exact=True).click()
                     download = await downloaded.value
@@ -275,10 +275,10 @@ async def main():
                     assert not (path.parent / entries[1]["file"]).exists()
                     assert backend.STORE.get(catalog_id)["entries"][0]["hidden"]
                     assert not await page.evaluate("window.catalogNode.imageCatalog.hasUnsavedChanges()")
-                    await page.get_by_role("button", name="Reload Catalog", exact=True).click()
+                    await page.get_by_role("button", name="Reload", exact=True).click()
                     await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (2/2)")
                     await page.evaluate("window.catalogNode.outputs[3].links = [77]")
-                    await page.get_by_role("button", name="Edit Catalog", exact=True).click()
+                    await page.get_by_role("button", name="Edit", exact=True).click()
                     await expect(page.locator(".ic-image-block")).to_be_visible()
                     await expect(page.locator(".ic-catalog-block .ic-schema-field")).to_have_count(3)
                     await page.locator(".ic-schema-field").nth(0).get_by_label("Hidden", exact=True).check()
@@ -301,7 +301,7 @@ async def main():
                     await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
                     assert all("seed" not in entry["values"] and entry["values"]["rating"] == 0 for entry in backend.STORE.get(catalog_id)["entries"])
                     async with page.expect_download() as downloaded:
-                        await page.get_by_role("button", name="Export Catalog", exact=True).click()
+                        await page.get_by_role("button", name="Export", exact=True).click()
                     archive_path = await (await downloaded.value).path()
                     await page.get_by_label("Catalog", exact=True).select_option("")
                     await expect(page.locator(".ic-image-block")).to_have_count(0)
@@ -310,13 +310,116 @@ async def main():
                     assert len(backend.STORE.list()["catalogs"]) == 2
                     imported_id = await page.evaluate("window.catalogNode.imageCatalog.state.catalogId")
                     assert imported_id != catalog_id
+                    await expect(page.get_by_role("button", name="Import Additions", exact=True)).to_be_visible()
+                    await page.get_by_role("button", name="Add Image", exact=True).click()
+                    await page.get_by_label("Add image", exact=True).set_input_files({"name": "remote-added.png", "mimeType": "image/png", "buffer": png.getvalue()})
+                    await page.get_by_role("button", name="Save Changes", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
+                    async with page.expect_download() as updated_download:
+                        await page.get_by_role("button", name="Export", exact=True).click()
+                    additions_path = await (await updated_download.value).path()
+                    await page.get_by_label("Catalog", exact=True).select_option(catalog_id)
+                    before_additions = backend.STORE.get(catalog_id)
+                    await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(additions_path)
+                    await expect(page.locator(".ic-status")).to_have_text("Imported 1 new images; skipped 2 existing images.")
+                    after_additions = backend.STORE.get(catalog_id)
+                    assert after_additions["entries"][:-1] == before_additions["entries"]
+                    await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(additions_path)
+                    await expect(page.locator(".ic-status")).to_have_text("Imported 0 new images; skipped 3 existing images.")
+                    await page.get_by_label("rating", exact=True).fill("42")
+                    await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(additions_path)
+                    await expect(page.locator(".ic-status")).to_have_text("Save local changes and apply or cancel field editing before importing additions.")
+                    await expect(page.get_by_label("rating", exact=True)).to_have_value("42")
+                    assert backend.STORE.get(catalog_id) == after_additions
+                    await page.get_by_role("button", name="Reload", exact=True).click()
+                    await page.get_by_label("Catalog", exact=True).select_option(imported_id)
+                    # Export another image with a new field from the second catalog.
+                    await page.get_by_role("button", name="Add Image", exact=True).click()
+                    await page.get_by_label("Add image", exact=True).set_input_files({"name": "with-new-field.png", "mimeType": "image/png", "buffer": png.getvalue()})
+                    await page.get_by_role("button", name="Edit", exact=True).click()
+                    await page.get_by_role("button", name="Add property", exact=True).click()
+                    await page.get_by_label("Property 4 name", exact=True).fill("remote_score")
+                    await page.get_by_label("Property 4 type", exact=True).select_option("Integer")
+                    await page.get_by_role("button", name="Apply Fields", exact=True).click()
+                    await page.get_by_label("remote_score", exact=True).fill("77")
+                    await page.get_by_role("button", name="Save Changes", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
+                    async with page.expect_download() as field_download:
+                        await page.get_by_role("button", name="Export", exact=True).click()
+                    field_archive = await (await field_download.value).path()
+                    await page.get_by_label("Catalog", exact=True).select_option(catalog_id)
+                    before_fields = backend.STORE.get(catalog_id)
+                    await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(field_archive)
+                    choice = page.get_by_role("dialog", name="Import catalog field differences", exact=True)
+                    await expect(choice).to_contain_text("remote_score (Integer)")
+                    assert backend.STORE.get(catalog_id) == before_fields
+                    await choice.get_by_role("button", name="Cancel", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("Import cancelled. No changes were saved.")
+                    assert backend.STORE.get(catalog_id) == before_fields
+                    await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(field_archive)
+                    await choice.get_by_role("button", name="Import Without New Fields", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("Imported 1 new images; skipped 3 existing images.")
+                    ignored_fields = backend.STORE.get(catalog_id)
+                    assert ignored_fields["schema"] == before_fields["schema"]
+                    assert "remote_score" not in ignored_fields["entries"][-1]["values"]
+                    await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(field_archive)
+                    await choice.press("Escape")
+                    await expect(page.locator(".ic-status")).to_have_text("Import cancelled. No changes were saved.")
+                    await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(field_archive)
+                    await choice.get_by_role("button", name="Extend Catalog and Import", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("Imported 0 new images; skipped 4 existing images. Added 1 new field.")
+                    await expect(page.get_by_label("remote_score", exact=True)).to_have_value("0")
+                    assert await page.evaluate("window.catalogNode.outputs.map(output => output.name)") == ["IMAGE", "caption", "enabled", "rating", "remote_score"]
+                    assert all(e["values"]["remote_score"] == 0 for e in backend.STORE.get(catalog_id)["entries"])
+                    await page.get_by_label("Catalog", exact=True).select_option(imported_id)
+                    # The older archive lacks remote_score; warn and allow defaults.
+                    await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(additions_path)
+                    await expect(choice).to_contain_text("The archive is missing these local fields:")
+                    await expect(choice).to_contain_text("remote_score (Integer)")
+                    await expect(choice.get_by_role("button", name="Extend Catalog and Import", exact=True)).to_have_count(0)
+                    before_missing = backend.STORE.get(imported_id)
+                    await choice.get_by_role("button", name="Cancel", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("Import cancelled. No changes were saved.")
+                    assert backend.STORE.get(imported_id) == before_missing
+                    # Add a local field to the first catalog, then import a new image
+                    # from the second with that field absent from its archive.
+                    await page.get_by_label("Catalog", exact=True).select_option(catalog_id)
+                    await page.get_by_role("button", name="Edit", exact=True).click()
+                    await page.get_by_role("button", name="Add property", exact=True).click()
+                    await page.get_by_label("Property 5 name", exact=True).fill("local_note")
+                    await page.get_by_role("button", name="Apply Fields", exact=True).click()
+                    await page.get_by_label("local_note", exact=True).fill("keep local value")
+                    await page.get_by_role("button", name="Save Changes", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
+                    local_before_missing = backend.STORE.get(catalog_id)
+                    await page.get_by_label("Catalog", exact=True).select_option(imported_id)
+                    await page.get_by_role("button", name="Add Image", exact=True).click()
+                    await page.get_by_label("Add image", exact=True).set_input_files({"name": "missing-field.png", "mimeType": "image/png", "buffer": png.getvalue()})
+                    await page.get_by_role("button", name="Save Changes", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
+                    async with page.expect_download() as missing_download:
+                        await page.get_by_role("button", name="Export", exact=True).click()
+                    missing_archive = await (await missing_download.value).path()
+                    await page.get_by_label("Catalog", exact=True).select_option(catalog_id)
+                    await page.get_by_label("Import catalog ZIP", exact=True).set_input_files(missing_archive)
+                    await expect(choice).to_contain_text("local_note (String)")
+                    await expect(choice).to_contain_text("empty strings")
+                    assert backend.STORE.get(catalog_id) == local_before_missing
+                    await choice.get_by_role("button", name="Import With Defaults", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("Imported 1 new images; skipped 4 existing images.")
+                    after_missing = backend.STORE.get(catalog_id)
+                    assert after_missing["schema"] == local_before_missing["schema"]
+                    assert after_missing["entries"][:-1] == local_before_missing["entries"]
+                    assert after_missing["entries"][-1]["values"]["local_note"] == ""
+                    await expect(page.get_by_label("local_note", exact=True)).to_have_value("keep local value")
+                    await page.get_by_label("Catalog", exact=True).select_option(imported_id)
                     screenshots = ROOT / "test-results"
                     screenshots.mkdir(exist_ok=True)
                     await page.screenshot(path=str(screenshots / "catalog-browser-smoke.png"), full_page=True)
-                    await page.get_by_role("button", name="Delete Catalog", exact=True).click()
+                    await page.locator(".ic-catalog-actions").get_by_role("button", name="Delete", exact=True).click()
                     await expect(page.get_by_role("button", name="Create Now", exact=True)).to_be_visible()
                     await page.get_by_label("Catalog", exact=True).select_option(catalog_id)
-                    await page.get_by_role("button", name="Delete Catalog", exact=True).click()
+                    await page.locator(".ic-catalog-actions").get_by_role("button", name="Delete", exact=True).click()
                     await expect(page.get_by_role("button", name="Create Now", exact=True)).to_be_visible()
                     assert backend.STORE.list()["catalogs"] == []
                     assert errors == [], errors

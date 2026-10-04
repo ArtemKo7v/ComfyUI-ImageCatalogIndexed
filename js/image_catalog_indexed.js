@@ -1,7 +1,7 @@
 import { app } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 import { buildClientCatalog, defaultValues, identifier, migrateValues, nextIndex, outputDefinitions, wrapIndex } from "./catalog_model.js";
-import { button, element, exportChoice, installStyles, label, renderCatalog, renderCatalogEditor, renderCreate, select } from "./catalog_ui.js";
+import { button, element, exportChoice, importFieldsChoice, installStyles, label, refreshButton, renderCatalog, renderCatalogEditor, renderCreate, select } from "./catalog_ui.js";
 
 const NODE_CLASS = "ArtemKo7vImageCatalogIndexed";
 const PREFIX = "/artemko7v/image-catalog";
@@ -420,17 +420,42 @@ export class CatalogController {
     this.render();
   }
 
-/** Import an archive and select the new catalog. */
+/** Import a new catalog, or append missing records to the selected catalog. */
   async importCatalog(file) {
     if (!file) return;
+    if (this.busy) throw new Error("A catalog operation is already in progress.");
     if (file.size > 512 * 1024 * 1024) throw new Error("Catalog ZIP uploads cannot exceed 512 MiB.");
+    const catalogId = this.state.catalogId;
+    if (catalogId && (this.hasUnsavedChanges() || this.state.catalogEdit)) {
+      throw new Error("Save local changes and apply or cancel field editing before importing additions.");
+    }
     const body = new FormData();
     body.append("archive", file);
-    this.status("Importing catalog...");
-    const catalog = await request("/import", { method: "POST", body });
-    await this.loadCatalog(catalog.id);
-    await Promise.all([...controllers.values()].map((controller) => controller.refreshList()));
-    this.status("Catalog imported.");
+    this.busy = true;
+    this.root.inert = true;
+    this.status(catalogId ? "Importing catalog additions..." : "Importing catalog...");
+    try {
+      const path = catalogId ? `/catalogs/${catalogId}/import?expected_revision=${this.catalog.revision ?? 0}` : "/import";
+      let result = await request(path, { method: "POST", body });
+      if (result.needs_field_choice) {
+        const choice = await importFieldsChoice(result.new_fields, result.missing_fields, this.catalog.schema.length);
+        if (choice === "cancel") {
+          this.status("Import cancelled. No changes were saved.");
+          return;
+        }
+        this.status("Importing catalog additions...");
+        result = await request(`${path}&field_policy=${choice}`, { method: "POST", body });
+      }
+      if (this.disposed || this.state.catalogId !== catalogId) return;
+      await this.loadCatalog(catalogId || result.id, Boolean(catalogId));
+      this.touch();
+      await Promise.all([...controllers.values()].map((controller) => controller.refreshList()));
+      const fieldsMessage = result.fields_added ? ` Added ${result.fields_added} new field${result.fields_added === 1 ? "" : "s"}.` : "";
+      this.status(catalogId ? `Imported ${result.added} new images; skipped ${result.skipped} existing images.${fieldsMessage}` : "Catalog imported.");
+    } finally {
+      this.busy = false;
+      this.root.inert = false;
+    }
   }
 
 /** Keep node output slots aligned with the current catalog schema. */
@@ -595,7 +620,7 @@ export class CatalogController {
         return;
       }
       await this.loadCatalog(id);
-    }))), button("Refresh", () => this.run(() => this.refreshList())));
+    }))), refreshButton(() => this.run(() => this.refreshList())));
     catalogBlock.append(selectorRow);
     this.statusElement = element("div", "ic-status" + (this.isError ? " is-error" : ""), this.message || "");
     const actions = element("div", "ic-actions ic-catalog-actions");
@@ -609,16 +634,17 @@ export class CatalogController {
       archive.value = "";
       this.run(() => this.importCatalog(file));
     });
-    if (!this.state.catalogId) actions.append(button("Import Catalog", () => archive.click()), archive);
+    if (!this.state.catalogId) actions.append(button("Import", () => archive.click()), archive);
     if (this.state.catalogId) {
-      actions.append(button("Edit Catalog", () => this.run(() => this.editCatalog())),
-        button("Export Catalog", () => this.run(() => this.exportCatalog())));
-      actions.append(button("Reload Catalog", () => this.run(async () => {
+      actions.append(button("Edit", () => this.run(() => this.editCatalog())),
+        button("Export", () => this.run(() => this.exportCatalog())),
+        button("Import Additions", () => archive.click()), archive);
+      actions.append(button("Reload", () => this.run(async () => {
         if ((this.hasUnsavedChanges() || this.state.catalogEdit) &&
           !window.confirm("Discard pending edits and reload this catalog?")) return;
         await this.loadCatalog(this.state.catalogId);
       })));
-      const remove = button("Delete Catalog", () => this.run(async () => {
+      const remove = button("Delete", () => this.run(async () => {
         const { catalogId, catalogName } = this.state;
         if (!window.confirm(`Delete catalog "${catalogName}" and all its images? This cannot be undone.`)) return;
         await request(`/catalogs/${catalogId}`, jsonRequest("DELETE", { confirm: catalogId }));

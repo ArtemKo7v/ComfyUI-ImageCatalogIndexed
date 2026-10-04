@@ -194,9 +194,17 @@ def validate_imported_image(path):
 
 
 @routes.post(API_PREFIX + "/import")
+@routes.post(API_PREFIX + "/catalogs/{catalog_id}/import")
 @route_errors
 async def upload_catalog_archive(request):
     """Receive and import a bounded ZIP upload."""
+    catalog_id = request.match_info.get("catalog_id")
+    expected_revision = None
+    if catalog_id is not None:
+        try:
+            expected_revision = int(request.query.get("expected_revision", ""))
+        except ValueError as error:
+            raise CatalogError("Importing additions requires an integer expected_revision.") from error
     reader = await request.multipart()
     part = await reader.next()
     if part is None or part.name != "archive" or not part.filename:
@@ -209,8 +217,9 @@ async def upload_catalog_archive(request):
                 raise CatalogError("Catalog ZIP uploads cannot exceed 512 MiB.")
             await asyncio.to_thread(stream.write, chunk)
         stream.seek(0)
-        data = await asyncio.to_thread(import_catalog, STORE, stream, validate_imported_image)
-    return web.json_response(data, status=201)
+        data = await asyncio.to_thread(import_catalog, STORE, stream, validate_imported_image,
+                                       catalog_id, expected_revision, request.query.get("field_policy"))
+    return web.json_response(data, status=200 if catalog_id is not None else 201)
 
 
 @routes.delete(API_PREFIX + "/catalogs/{catalog_id}")

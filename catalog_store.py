@@ -93,6 +93,9 @@ def validate_catalog(data, catalog_id=None):
         if not isinstance(data, dict) or data["version"] != 1:
             raise CatalogError("Unsupported catalog format.")
         validate_id(data["id"])
+        # Legacy catalogs use their original storage IDs as synchronization
+        # identities. Fresh imports retain these while changing storage IDs.
+        validate_id(data.setdefault("sync_id", data["id"]))
         if catalog_id is not None and data["id"] != catalog_id:
             raise CatalogError("Catalog identifier does not match its directory.")
         if not isinstance(data["name"], str) or not 1 <= len(data["name"].strip()) <= 120:
@@ -106,17 +109,19 @@ def validate_catalog(data, catalog_id=None):
         if type(revision) is not int or revision < 0:
             raise CatalogError("Invalid schema revision.")
         # Imported and on-disk records share these integrity checks.
-        seen, files = set(), set()
+        seen, files, sync_ids = set(), set(), set()
         for entry in data["entries"]:
             validate_id(entry["id"])
+            sync_id = validate_id(entry.setdefault("sync_id", entry["id"]))
             filename = entry["file"]
             if not isinstance(filename, str) or not filename.endswith(".png"):
                 raise CatalogError("Invalid image file.")
             validate_id(filename[:-4])
-            if entry["id"] in seen or filename in files:
+            if entry["id"] in seen or filename in files or sync_id in sync_ids:
                 raise CatalogError("Invalid image record.")
             seen.add(entry["id"])
             files.add(filename)
+            sync_ids.add(sync_id)
             if not isinstance(entry["filename"], str) or not 1 <= len(entry["filename"]) <= 255:
                 raise CatalogError("Invalid image filename.")
             entry["values"] = validate_values(data["schema"], entry["values"])
@@ -209,7 +214,7 @@ class CatalogStore:
             if any(item["name"].casefold() == name.strip().casefold() for item in self.list()["catalogs"]):
                 raise CatalogConflict("A catalog with this name already exists.")
             catalog_id = uuid.uuid4().hex
-            data = {"version": 1, "id": catalog_id, "name": name.strip(), "schema": schema,
+            data = {"version": 1, "id": catalog_id, "sync_id": catalog_id, "name": name.strip(), "schema": schema,
                     "entries": [], "applied_operations": []}
             directory = self._directory(catalog_id)
             directory.mkdir(parents=True)
@@ -376,13 +381,18 @@ class CatalogStore:
                 raise CatalogError("Existing property types cannot be changed.")
             _, staged = self._client_sources(original, client)
             previous = {entry["id"]: entry for entry in original["entries"]}
+            # Synchronization identity survives old workflow snapshots and image
+            # replacements; clients cannot change an existing record's lineage.
+            client["sync_id"] = original["sync_id"]
             for entry in client["entries"]:
                 old = previous.get(entry["id"])
+                entry["sync_id"] = old["sync_id"] if old else entry["id"]
                 changed = old and any(old[key] != entry[key] for key in ("values", "hidden", "filename", "file"))
                 entry["revision"] = old["revision"] + int(bool(changed)) if old else 1
             client["revision"] = original["revision"] + 1
             client["schema_revision"] = original["schema_revision"] + int(client["schema"] != original["schema"])
             client["applied_operations"] = (original["applied_operations"] + [operation_id])[-128:]
+            validate_catalog(client, catalog_id)
             directory = self._directory(catalog_id)
             destinations = []
             try:

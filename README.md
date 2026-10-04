@@ -23,7 +23,7 @@ There are no additional runtime packages to install, so this node does not need 
    the workflow; running the workflow alone never saves the catalog.
 
 Catalog names must be unique, ignoring case. Property names must also be unique,
-and `IMAGE` is reserved for the image output. Use **Edit Catalog** to manage fields
+and `IMAGE` is reserved for the image output. Use **Edit** to manage fields
 after creation.
 
 | Property type | Editor | Output type | Default |
@@ -126,18 +126,18 @@ does not duplicate images. Version checks reject a stale save from another node
 or browser tab; local edits remain available. Copy your local edits or save the
 workflow before using Reload to resolve a conflict.
 
-**Refresh** updates only the available catalog list. **Reload Catalog** discards
+**Refresh** updates only the available catalog list. **Reload** discards
 local changes after confirmation and loads the server version. Switching catalogs
 also asks before discarding local changes.
 
-**Delete Catalog** remains a separate, immediate operation: after confirmation it
+**Delete** remains a separate, immediate operation: after confirmation it
 permanently deletes the catalog JSON, its images, and its staged uploads. Creation
-and ZIP import also create server catalogs immediately.
+and ZIP import also write server catalogs immediately.
 Other catalogs are not affected.
 
 ## Catalog fields
 
-**Edit Catalog** opens a separate editor for the selected catalog's schema.
+**Edit** opens a separate editor for the selected catalog's schema.
 Use **Add property** to append a field, **Remove property** to remove one, and
 **Hidden** to hide a field from image forms. Up to 32 fields are supported,
 including hidden fields. Existing field names and types are read-only; create a
@@ -157,17 +157,50 @@ Finish field editing with **Apply Fields** or **Cancel** before saving or export
 
 ## Export and import
 
-**Export Catalog** downloads a ZIP containing the server's exact `catalog.json`
+**Export** downloads a ZIP containing the server's exact `catalog.json`
 and its saved PNG files at the archive root, including hidden records and fields.
 If there are local changes, a dialog offers **Save and Export**, **Export Saved
 Version**, or **Cancel**. Exporting the saved version leaves local changes intact.
 Saving first commits all local changes, including deleted images, before export.
 
-**Import Catalog** is available when **Create a new Image Catalog** is selected.
+**Import** is available when **Create a new Image Catalog** is selected.
 Choose an exported ZIP to import its data as a separate catalog. The imported
 catalog becomes active. Identifiers are regenerated and existing catalogs are
 never overwritten. Name collisions receive an ` (imported)` suffix, numbered when
 necessary. A failed import does not publish a partial catalog.
+
+To synchronize additions from another ComfyUI instance, select the existing
+catalog and click **Import Additions**, then choose that instance's exported ZIP.
+New records are appended in archive order, including hidden images and their
+property values. Existing images, values, visibility, order, and local records
+absent from the archive are retained. Reimporting the same ZIP adds no duplicates;
+the status reports how many images were added or skipped. This operation saves
+directly on the server. Save pending local changes and finish field editing first.
+Other nodes keep their workflow snapshots; use **Reload** to see additions.
+
+Catalogs and records retain synchronization identifiers across export/import,
+even though each fresh import gets new storage identifiers. The archive must
+belong to the same catalog family, and properties present in both catalogs must
+have the same type. Field order and visibility can differ.
+If the archive contains additional properties, a dialog lists their names and
+types and offers **Cancel**, **Import Without New Fields**, or **Extend Catalog
+and Import**. No changes are saved until you choose an import option. Ignoring
+new fields imports only values for existing local fields. Extending appends the
+new fields, retains their values on new images, and fills existing images with
+the type defaults (empty string, zero, or false). Existing image values are
+otherwise retained. Extension also works when all archive images already exist;
+the catalog still supports a maximum of 32 fields.
+If local fields are missing from the archive, the dialog lists them and offers
+**Cancel** or **Import With Defaults**. The current schema and existing images
+are retained; new images receive empty strings for String/Text, zero for Integer,
+and false for Boolean in the missing fields. If there are both new and missing
+fields, the same dialog lists both groups and offers the new-field choices above;
+missing local fields receive defaults with either import option.
+Older archives with original catalog/record IDs are supported. Copies imported
+by older versions that regenerated IDs without retaining their origin cannot be
+matched automatically; transfer a fresh export with this version to establish
+a shared catalog family. Deletions and edits to existing records are not synchronized.
+An image deleted locally can return if it is still present in a later archive.
 
 Import accepts ZIP files up to 512 MiB, with up to 10,000 images, 16 MiB of JSON,
 and 2 GiB of total unpacked data. Files must match the JSON manifest and contain

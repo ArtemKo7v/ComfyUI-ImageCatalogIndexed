@@ -16,6 +16,27 @@ export function button(text, action) {
   return control;
 }
 
+/** Create a compact, accessible refresh control. */
+export function refreshButton(action) {
+  const control = button("", action);
+  control.className = "ic-refresh";
+  control.title = "Refresh";
+  control.setAttribute("aria-label", "Refresh");
+  const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  icon.setAttribute("viewBox", "0 0 24 24");
+  icon.setAttribute("width", "16");
+  icon.setAttribute("height", "16");
+  icon.setAttribute("fill", "none");
+  icon.setAttribute("stroke", "currentColor");
+  icon.setAttribute("stroke-width", "2");
+  icon.setAttribute("stroke-linecap", "round");
+  icon.setAttribute("stroke-linejoin", "round");
+  icon.setAttribute("aria-hidden", "true");
+  icon.innerHTML = '<path d="M20.5 9A9 9 0 0 0 5 5L2 8M2 2v6h6M3.5 15A9 9 0 0 0 19 19l3-3M22 22v-6h-6"/>';
+  control.append(icon);
+  return control;
+}
+
 /** Create a select control from value-label option pairs. */
 export function select(options, value, onChange) {
   const control = element("select");
@@ -138,6 +159,9 @@ export function installStyles() {
     .image-catalog .ic-image-block { margin-top: 12px; }
     .image-catalog .ic-selector-row { display: flex; align-items: end; gap: 8px; }
     .image-catalog .ic-selector-row > .ic-field { flex: 1; min-width: 0; margin: 0; }
+    .image-catalog .ic-refresh { display: inline-flex; align-items: center; justify-content: center;
+      flex: 0 0 28px; width: 28px; height: 28px; padding: 5px; }
+    .image-catalog .ic-catalog-actions { margin-bottom: 12px; }
     .image-catalog .ic-delete-actions { justify-content: flex-end; }
     .ic-export-dialog { color: #ddd; background: #252525; border: 1px solid #666; border-radius: 8px; max-width: 440px; padding: 20px; }
     .ic-export-dialog::backdrop { background: #0008; }
@@ -352,6 +376,38 @@ export function renderCatalogEditor(controller, root = controller.root) {
     controller.render();
   }));
   root.append(actions);
+}
+
+/** Resolve archive field differences before changing the saved catalog. */
+export function importFieldsChoice(fields, missingFields, currentCount) {
+  return new Promise((resolve) => {
+    const dialog = element("dialog", "ic-export-dialog");
+    dialog.setAttribute("aria-label", "Import catalog field differences");
+    if (fields.length) {
+      dialog.append(element("p", "", "The archive contains fields missing from this catalog:"));
+      const list = element("ul");
+      for (const field of fields) list.append(element("li", "", `${field.name} (${field.type})`));
+      dialog.append(list, element("p", "", "Import new images without these fields, or extend the catalog. Existing images receive default values for new fields; their other values are kept."));
+    }
+    if (missingFields.length) {
+      dialog.append(element("p", "", "The archive is missing these local fields:"));
+      const list = element("ul");
+      for (const field of missingFields) list.append(element("li", "", `${field.name} (${field.type})`));
+      dialog.append(list, element("p", "", "These fields will be filled on new images with defaults: empty strings for String/Text, 0 for Integer, and false for Boolean. Existing image values are kept."));
+    }
+    const canExtend = currentCount + fields.length <= MAX_PROPERTIES;
+    if (!canExtend) dialog.append(element("p", "", `Extending would exceed the limit of ${MAX_PROPERTIES} fields.`));
+    const choices = fields.length ? [["cancel", "Cancel"], ["ignore", "Import Without New Fields"], ["extend", "Extend Catalog and Import"]] :
+      [["cancel", "Cancel"], ["ignore", "Import With Defaults"]];
+    for (const [value, title] of choices) {
+      const control = button(title, () => dialog.close(value));
+      control.disabled = value === "extend" && !canExtend;
+      dialog.append(control);
+    }
+    dialog.addEventListener("close", () => { resolve(dialog.returnValue || "cancel"); dialog.remove(); }, { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
 }
 
 /** Ask which persisted version to export without conflating discard and cancel. */
