@@ -225,10 +225,17 @@ export function renderCatalog(controller, root = controller.root) {
   const imageTitle = `Image (${selectedIndex + 1}/${catalog.entries.length})`;
   const selectImage = (id) => state.newImages.some((draft) => draft.token === id)
     ? controller.selectDraft(id) : controller.selectEntry(id);
+  const hasName = catalog.schema.some((field) => field.name === "name");
+  const optionTitle = (item) => {
+    const name = hasName ? Array.from(String(item.values?.name ?? "").trim()) : [];
+    const title = name.length ? `${name.slice(0, 32).join("")}${name.length > 32 ? "…" : ""} [${item.filename}]` : item.filename;
+    return title + (item.hidden ? " (hidden)" : "");
+  };
+  let imageSelect;
   if (catalog.entries.length || state.newImages.length) {
-    const options = storedEntries.map((item) => [item.id, `${item.filename}${item.hidden ? " (hidden)" : ""} [${item.id.slice(0, 6)}]`]);
-    options.push(...state.newImages.map((image, index) => [`new:${image.token}`, `New ${index + 1}: ${image.filename || "Select a file"}`]));
-    const imageSelect = select(options, state.adding ? `new:${state.draftToken}` : state.selectedId,
+    const options = storedEntries.map((item) => [item.id, optionTitle(item)]);
+    options.push(...state.newImages.map((image, index) => [`new:${image.token}`, image.filename ? optionTitle(image) : `New ${index + 1}: Select a file`]));
+    imageSelect = select(options, state.adding ? `new:${state.draftToken}` : state.selectedId,
       (id) => id.startsWith("new:") ? controller.selectDraft(id.slice(4)) : controller.selectEntry(id));
     const field = label("Image", imageSelect);
     field.classList.add("ic-image-selector");
@@ -306,6 +313,10 @@ export function renderCatalog(controller, root = controller.root) {
         const target = state.adding ? controller.newImage.values : controller.editEntry(entry).values;
         target[field.name] = field.type === "Boolean" ? input.checked : field.type === "Integer" ? input.valueAsNumber : input.value;
         controller.touch();
+        if (field.name === "name" && imageSelect?.selectedOptions[0]) {
+          const item = state.adding ? controller.newImage : entry;
+          if (item.filename) imageSelect.selectedOptions[0].textContent = optionTitle({ ...item, values: target });
+        }
       });
       record.append(label(field.name, input));
     }

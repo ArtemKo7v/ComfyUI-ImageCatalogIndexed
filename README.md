@@ -42,6 +42,12 @@ The image dropdown and preview select a record from the active catalog. Choosing
 a visible record updates `image_index`. This is the only input that can be
 connected to another node; images and property editors are not input sockets.
 
+Dropdown labels show the filename, without record hashes. If the schema has a
+`name` field with a nonempty value, the label is `name [filename]`; the name is
+limited to 32 characters followed by an ellipsis when longer. Local name edits
+update the label immediately, including drafts. Empty names fall back to the
+filename, and hidden records retain their `(hidden)` marker.
+
 The selector heading shows **Image (N/NN)**: the displayed image's one-based
 position and the total number of local catalog images, including hidden records
 and drafts with selected files. Empty drafts are not counted and show position
