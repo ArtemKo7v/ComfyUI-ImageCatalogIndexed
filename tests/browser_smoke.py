@@ -278,6 +278,13 @@ async def main():
                     await page.get_by_role("button", name="Reload", exact=True).click()
                     await expect(page.locator(".ic-image-selector > span")).to_have_text("Image (2/2)")
                     await page.evaluate("window.catalogNode.outputs[3].links = [77]")
+                    # A reactive schema must also open in the field editor.
+                    assert await page.evaluate("""() => {
+                      const controller = window.catalogNode.imageCatalog;
+                      controller.state.schema = new Proxy(controller.state.schema, {});
+                      try { structuredClone(controller.state.schema); return false; }
+                      catch (error) { return error.name === "DataCloneError"; }
+                    }""")
                     await page.get_by_role("button", name="Edit", exact=True).click()
                     await expect(page.locator(".ic-image-block")).to_be_visible()
                     await expect(page.locator(".ic-catalog-block .ic-schema-field")).to_have_count(3)
@@ -413,6 +420,41 @@ async def main():
                     assert after_missing["entries"][-1]["values"]["local_note"] == ""
                     await expect(page.get_by_label("local_note", exact=True)).to_have_value("keep local value")
                     await page.get_by_label("Catalog", exact=True).select_option(imported_id)
+                    # Reproduce ComfyUI's reactive workflow state with nested
+                    # proxies, then save a new image without queueing a workflow.
+                    before_proxy_save = backend.STORE.get(imported_id)
+                    await page.get_by_role("button", name="Add Image", exact=True).click()
+                    await page.get_by_label("Add image", exact=True).set_input_files({"name": "proxy-save.png", "mimeType": "image/png", "buffer": png.getvalue()})
+                    await page.get_by_label("rating", exact=True).fill("91")
+                    assert await page.evaluate("""() => {
+                      const proxies = new WeakMap();
+                      const reactive = (value) => {
+                        if (value === null || typeof value !== "object") return value;
+                        if (!proxies.has(value)) proxies.set(value, new Proxy(value, {
+                          get(target, key, receiver) { return reactive(Reflect.get(target, key, receiver)); }
+                        }));
+                        return proxies.get(value);
+                      };
+                      const controller = window.catalogNode.imageCatalog;
+                      controller.state = reactive(controller.state);
+                      controller.catalog = reactive(controller.catalog);
+                      try { structuredClone(controller.snapshot()); return false; }
+                      catch (error) { return error.name === "DataCloneError"; }
+                    }""")
+                    await page.get_by_role("button", name="Save Changes", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("All catalog changes saved.")
+                    after_proxy_save = backend.STORE.get(imported_id)
+                    assert len(after_proxy_save["entries"]) == len(before_proxy_save["entries"]) + 1
+                    saved_proxy_image = after_proxy_save["entries"][-1]
+                    assert saved_proxy_image["filename"] == "proxy-save.png"
+                    assert saved_proxy_image["values"]["rating"] == 91
+                    assert backend.STORE.image_path(imported_id, saved_proxy_image["id"]).is_file()
+                    await page.get_by_role("button", name="Reload", exact=True).click()
+                    await expect(page.locator(".ic-status")).to_have_text("")
+                    await page.get_by_label("Image", exact=True).select_option(saved_proxy_image["id"])
+                    await expect(page.locator("img.ic-preview")).to_have_attribute("alt", "proxy-save.png")
+                    await expect(page.get_by_label("rating", exact=True)).to_have_value("91")
+                    assert backend.STORE.get(imported_id) == after_proxy_save
                     screenshots = ROOT / "test-results"
                     screenshots.mkdir(exist_ok=True)
                     await page.screenshot(path=str(screenshots / "catalog-browser-smoke.png"), full_page=True)

@@ -320,7 +320,7 @@ export class CatalogController {
   async editCatalog() {
     if (!this.catalog) return;
     this.state.catalogEdit = { catalogId: this.state.catalogId,
-      original: structuredClone(this.state.schema),
+      original: JSON.parse(JSON.stringify(this.state.schema)),
       fields: this.state.schema.map((field) => ({ ...field, existing: true })) };
     this.persist();
     this.render();
@@ -378,7 +378,10 @@ export class CatalogController {
     if (this.busy) throw new Error("A catalog save is already in progress.");
     if (this.state.catalogEdit) throw new Error("Apply or cancel field editing before saving.");
     if (confirm && !window.confirm("Save all changes for all images and catalog fields? Deleted images will be permanently removed from the server.")) return;
-    const snapshot = structuredClone(this.snapshot());
+    // ComfyUI may wrap workflow state in reactive proxies, which structuredClone
+    // rejects. Capture the same plain JSON metadata that the save API consumes;
+    // local File objects remain in this.files for upload staging.
+    const snapshot = JSON.parse(JSON.stringify(this.snapshot()));
     this.busy = true;
     this.root.inert = true;
     this.status("Saving all catalog changes...");
